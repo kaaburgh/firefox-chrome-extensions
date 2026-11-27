@@ -164,68 +164,105 @@
     if (!job) return {status:"idle", hits:[], notes:[]};
     const {status, notes, layoutChanges, steps, phase, query, sensitive, pace, original, root, idx, started} = job;
     return {status, notes:[...notes], layoutChanges, steps, phase, query, sensitive, pace, original,
+      logCount:job.log.length,
       elapsed: Math.round((job.finished || performance.now())-started),
       position:Math.round(top(root)), range:Math.round(max(root)),
       hits:[...idx.items].sort((a,b)=>a.y-b.y || a.x-b.x)};
   }
-  function note(j, message) { if (!j.notes.includes(message)) j.notes.push(message); }
+  // Diagnostic records contain only fixed event names and explicitly selected
+  // numeric/boolean metadata. Never include page text, query, URL, DOM IDs or raw exceptions.
+  function log(j, event, fields={}) {
+    if (j.log.length>=4096) { j.log.shift(); j.droppedLogs++; }
+    j.log.push({ms:Math.round(performance.now()-j.started),event,...fields});
+  }
+  function diagnostics() {
+    if (!job) return "";
+    return [
+      "Virtual Page Find diagnostic log v1",
+      "Started UTC: "+job.startedUTC,
+      "Status: "+job.status+"; pace: "+job.pace+"; matches: "+job.idx.items.length,
+      ...(job.droppedLogs ? ["Earlier records discarded: "+job.droppedLogs] : []),
+      ...job.log.map(({ms,event,...fields})=>ms+"ms "+event+" "+Object.entries(fields).map(([k,v])=>k+"="+v).join(" "))
+    ].join("\n");
+  }
+  function note(j, message, diagnostic=message) {
+    if (!j.notes.includes(message)) j.notes.push(message);
+    log(j,"warning",{reason:diagnostic});
+  }
   async function run(j) {
     const el = j.root;
-    let lastMutation = performance.now(), observer;
+    let lastMutation = performance.now(), observer, mutations=0;
+    log(j,"start",{pace:j.pace,minimumWait:waits[j.pace],rawTop:Math.round(el.scrollTop),top:Math.round(top(el)),range:Math.round(max(el)),viewHeight:Math.round(viewport(el).height),reverse:reversed(el)});
     const inputEvents = ["wheel","touchstart","pointerdown","keydown"];
     const interrupt = e => {
       if (e.isTrusted && (e.type !== "keydown" || ["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "].includes(e.key))) {
+        if (!j.cancel) log(j,"user-interaction",{type:e.type});
         j.cancel = true; j.manual = true;
       }
     };
     const alive = () => !j.cancel && el.isConnected && performance.now()-j.started < LIMIT.ms && j.steps < LIMIT.steps;
     async function settle(minimum=waits[j.pace]) {
       const start = performance.now();
+      const initialMutations=mutations;
       let lastChange = start, prev = [top(el),max(el)];
+      const record=reason=>log(j,"settle",{reason,waitMs:Math.round(performance.now()-start),mutations:mutations-initialMutations,top:Math.round(top(el)),range:Math.round(max(el))});
       while (alive()) {
         await pause(50);
         const now = performance.now(), current = [top(el),max(el)];
         if (current[0]!==prev[0] || current[1]!==prev[1]) { lastChange=now; prev=current; }
-        if (now-start>=minimum && now-Math.max(lastMutation,lastChange)>=160) return;
-        if (now-start>=Math.max(1500,minimum+500)) { note(j,"Some views did not settle; asynchronous content may have been missed."); return; }
+        if (now-start>=minimum && now-Math.max(lastMutation,lastChange)>=160) { record("quiet"); return; }
+        if (now-start>=Math.max(1500,minimum+500)) { record("timeout"); note(j,"Some views did not settle; asynchronous content may have been missed."); return; }
       }
+      record("interrupted");
     }
     try {
-      observer = new MutationObserver(()=>{lastMutation=performance.now();});
+      observer = new MutationObserver(records=>{lastMutation=performance.now(); mutations+=records.length;});
       observer.observe(isDocument(el) ? document.documentElement : el,{childList:true,subtree:true,characterData:true});
       for (const type of inputEvents) window.addEventListener(type,interrupt,{capture:true,passive:true});
-      j.phase="Finding top";
+      j.phase="Finding top"; log(j,"finding-top");
       let stable=0;
       for (let attempt=0; attempt<10 && alive() && stable<2; attempt++) {
         const oldMax=max(el);
         move(el,0); await settle(Math.max(500,waits[j.pace]));
         stable = top(el)<=2 && Math.abs(max(el)-oldMax)<=2 ? stable+1 : 0;
+        log(j,"top-check",{attempt:attempt+1,stable,oldRange:Math.round(oldMax),range:Math.round(max(el))});
       }
       if (stable<2 && alive()) note(j,"Could not establish a stable top; earlier content may be missing.");
-      j.phase="Scanning";
+      j.phase="Scanning"; log(j,"scanning");
       let bottomStable=0, lastRange=max(el), lastPosition=-1;
       while (alive()) {
         const current=top(el), range=max(el);
         // Lazy rendering may resize the scroll area without user input.
-        // Keep this visible as a layout caveat, not a failed traversal on its own.
+        // Reaching both ends does not establish coverage after reflow.
         if (Math.abs(range-lastRange)>3) {
           j.layoutChanges++;
+          log(j,"range-change",{step:j.steps+1,from:Math.round(lastRange),to:Math.round(range),top:Math.round(current)});
           lastRange=range;
         }
         if (lastPosition>=0 && current+3<lastPosition) note(j,"Page moved backwards during scan; completeness is uncertain.");
         lastPosition=current;
         j.steps++;
+        const before=j.idx.items.length, collectStarted=performance.now();
         const result = collect(el,j.query,j.sensitive,hit=>j.idx.add(hit)!=="limit",j.identities);
-        if (result.problem) { note(j,result.problem); break; }
         const height=viewport(el).height;
+        log(j,"view",{step:j.steps,top:Math.round(current),range:Math.round(range),height:Math.round(height),newHits:j.idx.items.length-before,totalHits:j.idx.items.length,collectMs:Math.round(performance.now()-collectStarted)});
+        if (result.problem) { note(j,result.problem); break; }
         if (height<1) { note(j,"Selected container became invisible."); break; }
         if (current>=range-2) {
           await settle(Math.max(650,waits[j.pace]));
           if (!alive()) break;
+          log(j,"bottom-check",{stable:bottomStable,top:Math.round(top(el)),range:Math.round(max(el))});
+          if (Math.abs(max(el)-lastRange)>3) {
+            j.layoutChanges++;
+            log(j,"range-change",{step:j.steps,from:Math.round(lastRange),to:Math.round(max(el)),top:Math.round(top(el))});
+            lastRange=max(el);
+          }
           if (top(el)>=max(el)-2 && Math.abs(max(el)-range)<=2) {
             if (++bottomStable>=2) {
               // Inspect once more after the final quiet period, not before it.
+              const before=j.idx.items.length;
               const final = collect(el,j.query,j.sensitive,hit=>j.idx.add(hit)!=="limit",j.identities);
+              log(j,"final-view",{newHits:j.idx.items.length-before,totalHits:j.idx.items.length});
               if (final.problem) note(j,final.problem); else j.reachedEnd=true;
               break;
             }
@@ -236,6 +273,7 @@
         const target=core.nextTop(current,height,range);
         move(el,target); await settle();
         const actual=top(el);
+        log(j,"scroll",{from:Math.round(current),target:Math.round(target),actual:Math.round(actual)});
         if (actual<=current+0.5 && max(el)>=current+3 && alive()) {
           note(j,"Scrolling stalled (possibly scroll snapping or page interference)."); break;
         }
@@ -244,16 +282,17 @@
       if (j.cancel) note(j,j.manual?"Stopped because you interacted with the page.":"Stopped by user.");
       else if (!el.isConnected) note(j,"Selected scroll container was removed.");
       else if (!j.reachedEnd && (j.steps>=LIMIT.steps || performance.now()-j.started>=LIMIT.ms)) note(j,"Scan safety limit reached.");
-      j.status = j.reachedEnd && !j.cancel && !j.notes.length ? "traversed" : "partial";
+      j.status = j.reachedEnd && !j.cancel && !j.notes.length ? (j.layoutChanges ? "layout-uncertain" : "traversed") : "partial";
     } catch (error) {
-      note(j,"Scan error: "+String(error.message || error).slice(0,300)); j.status="partial";
+      note(j,"Scan error: "+String(error.message || error).slice(0,300),"Scan error (details omitted)"); j.status="partial";
     } finally {
       observer?.disconnect();
       for (const type of inputEvents) window.removeEventListener(type,interrupt,true);
       if (!j.manual && el.isConnected) {
-        try { moveRaw(el,j.original); } catch { note(j,"Could not restore original scroll position."); j.status="partial"; }
+        try { moveRaw(el,j.original); log(j,"restore",{requested:Math.round(j.original),actual:Math.round(el.scrollTop)}); } catch { note(j,"Could not restore original scroll position."); j.status="partial"; }
       }
       j.phase="Finished"; j.finished=performance.now();
+      log(j,"finished",{status:j.status,steps:j.steps,hits:j.idx.items.length,layoutChanges:j.layoutChanges,reachedEnd:j.reachedEnd,manual:j.manual});
     }
   }
   function start(args) {
@@ -263,7 +302,7 @@
     if (!query.trim() || query.length>256) throw new Error("Enter 1–256 characters.");
     const pace=Object.hasOwn(waits,args.pace) ? args.pace : "normal";
     job={root,query,sensitive:!!args.sensitive,pace,original:root.scrollTop,idx:core.index(LIMIT.hits),
-      identities:{nodes:new WeakMap(),next:0},
+      identities:{nodes:new WeakMap(),next:0},log:[],droppedLogs:0,startedUTC:new Date().toISOString(),
       status:"running",phase:"Starting",started:performance.now(),steps:0,notes:[],layoutChanges:0,cancel:false,manual:false,reachedEnd:false};
     void run(job);
     return snapshot();
@@ -283,8 +322,8 @@
   }
   globalThis.__virtualPageFindV1 = {
     discover:()=>job?.status==="running"?null:discover(),
-    start, snapshot,
-    stop:()=>{if(job?.status==="running") job.cancel=true; return snapshot();},
+    start, snapshot, diagnostics,
+    stop:()=>{if(job?.status==="running"){log(job,"stop-request");job.cancel=true;} return snapshot();},
     jump,
     restore:()=>{if(job && job.status!=="running" && job.root.isConnected) moveRaw(job.root,job.original); return snapshot();},
     clear:()=>{if(job?.status==="running") throw new Error("Stop scan first."); job=null; return snapshot();}

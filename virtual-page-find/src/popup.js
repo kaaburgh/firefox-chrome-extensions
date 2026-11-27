@@ -21,8 +21,8 @@
     $("query").disabled=running; $("case").disabled=running; $("container").disabled=running; $("pace").disabled=running;
     $("copy").disabled=!s.hits.length || running; $("restore").disabled=!has || running;
     $("clear").disabled=!has || running;
-    const labels={idle:"Ready",running:s.phase,traversed:"Reached both ends (best effort)",partial:"Incomplete / uncertain"};
-    const statusLabel=s.status==="traversed" && s.layoutChanges ? "Reached both ends (layout changed; best effort)" : labels[s.status];
+    const labels={idle:"Ready",running:s.phase,traversed:"Reached both ends (best effort)","layout-uncertain":"Reached both ends — results uncertain (layout changed)",partial:"Incomplete / uncertain"};
+    const statusLabel=labels[s.status];
     $("status").textContent=statusLabel+(has?" · "+s.hits.length+" matches · "+s.steps+" views · "+Math.round(s.elapsed/1000)+" s":"");
     $("progress").hidden=!running;
     $("progress").max=Math.max(1,s.range||0);
@@ -31,7 +31,9 @@
     $("notes").hidden=!s.notes.length;
     $("layout").hidden=!s.layoutChanges;
     $("layout").textContent=s.layoutChanges ?
-      "The page resized its scroll area "+s.layoutChanges+" time(s), possibly while loading or rendering content. No user input is required for this. Match counts and jump positions remain best effort." : "";
+      "Warning: the page resized its scroll area "+s.layoutChanges+" time(s), possibly while loading or rendering content. No user input is required. Matches may be missing or duplicated, and jump positions may be inaccurate." : "";
+    $("diagnostics").hidden=!has;
+    if (!has) { $("log").value=""; $("copy-log").disabled=true; }
     const key=JSON.stringify([running,s.hits]);
     if (key!==revision) {
       revision=key;
@@ -51,6 +53,17 @@
     candidates=list;
     $("container").replaceChildren(...list.map(c=>{const o=document.createElement("option");o.value=String(c.id);o.textContent=c.label+" · "+c.height+" px view / "+c.range+" px scroll";return o;}));
   }
+  async function refreshLog() {
+    if (!$("diagnostics").open || !last || last.status==="idle") return;
+    const value=await call("diagnostics");
+    const log=$("log");
+    if (log.value!==value) {
+      const follow=log.scrollHeight-log.clientHeight-log.scrollTop<24;
+      log.value=value;
+      if (follow) log.scrollTop=log.scrollHeight;
+    }
+    $("copy-log").disabled=!value;
+  }
   async function poll() {
     if (busy) return;
     busy=true;
@@ -58,6 +71,10 @@
       const s=await call("snapshot");
       if(last?.status==="running" && s.status!=="running") await refreshCandidates();
       busy=false; render(s);
+      if ($("diagnostics").open) {
+        busy=true;
+        try { await refreshLog(); } finally {busy=false;}
+      }
     } catch(e) {busy=false; clearInterval(timer); message(e.message);}
   }
   async function perform(fn) {
@@ -72,6 +89,11 @@
   $("stop").addEventListener("click",()=>void perform(async()=>render(await call("stop"))));
   $("restore").addEventListener("click",()=>void perform(async()=>render(await call("restore"))));
   $("clear").addEventListener("click",()=>void perform(async()=>{render(await call("clear"));$("query").value="";}));
+  $("diagnostics").addEventListener("toggle",()=>{if ($("diagnostics").open) void poll();});
+  $("copy-log").addEventListener("click",async()=>{
+    try {await navigator.clipboard.writeText($("log").value);message("Diagnostic log copied.");}
+    catch(e){$("log").focus();$("log").select();message("Clipboard unavailable. Copy the selected diagnostic log manually.");}
+  });
   $("copy").addEventListener("click",async()=>{
     try {await navigator.clipboard.writeText(last.hits.map((h,i)=>(i+1)+". "+h.context+" ["+h.y+" px]").join("\n"));message("Copied.");}
     catch(e){message("Clipboard unavailable: "+e.message);}
@@ -84,6 +106,7 @@
       const s=await call("snapshot");
       if (s.query) { $("query").value=s.query; $("case").checked=s.sensitive; $("pace").value=s.pace || "normal"; }
       await refreshCandidates();render(s);
+      if ($("diagnostics").open) await refreshLog();
       timer=setInterval(poll,400);
       if(s.status!=="running") $("query").focus();
     } catch(e) {message("Cannot open scanner: "+e.message);}

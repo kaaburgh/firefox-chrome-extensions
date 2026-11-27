@@ -10,5 +10,9 @@ label { font-weight: 600; } .check { font-weight: normal; display:flex; align-it
 button { cursor:pointer; } button:disabled { cursor:default; }
 #results { max-height: 240px; overflow:auto; margin-top:8px; display:grid; grid-template-columns:minmax(0,1fr); gap:4px; }
 .result { text-align:left; overflow-wrap:anywhere; white-space:normal; }
-#layout,#notes,#message { overflow-wrap:anywhere; } #layout { font-size:12px; opacity:.85; } #notes { color:light-dark(#8a4800,#ffcd8b); }
+#layout,#notes,#message { overflow-wrap:anywhere; } #layout { font-size:12px; font-weight:600; color:light-dark(#8a4800,#ffcd8b); } #notes { color:light-dark(#8a4800,#ffcd8b); }
 .hint { font-size:11px; opacity:.8; } progress { width:100%; }
+
+#diagnostics { margin-top:10px; }
+#diagnostics summary { cursor:pointer; font-weight:600; }
+#log { box-sizing:border-box; width:100%; max-width:100%; resize:vertical; font:11px ui-monospace,monospace; }

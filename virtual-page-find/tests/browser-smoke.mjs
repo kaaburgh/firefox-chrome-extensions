@@ -55,6 +55,7 @@ async function test(name, browserType) {
     console.log(name+": passed container discovery, seven/six matches, inline split, repeated labels, jump, restoration, cancellation");
     await reviewRegressions(page, name);
     await popupSizing(page, name);
+    await popupDiagnostics(page, name);
   } finally { await browser.close(); }
 }
 
@@ -63,12 +64,12 @@ async function reviewRegressions(page,name) {
     await page.setContent('<!doctype html><style>body{margin:0;font:16px sans-serif}#review-list{height:200px;width:400px;overflow:auto;overflow-anchor:none}</style>'+markup);
     return page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#review-list").id);
   }
-  async function scan(id, pace="normal") {
+  async function scan(id, pace="normal", expectedStatus="traversed") {
     const before=await page.locator("#review-list").evaluate(el=>el.scrollTop);
     await page.evaluate(({id,pace})=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace}),{id,pace});
     await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
     const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
-    assert.equal(s.status,"traversed",s.notes.join("; "));
+    assert.equal(s.status,expectedStatus,s.notes.join("; "));
     assert.equal(await page.locator("#review-list").evaluate(el=>el.scrollTop),before);
     return s;
   }
@@ -111,11 +112,29 @@ async function reviewRegressions(page,name) {
     <script>(()=>{const el=document.querySelector("#review-list");let appended=false;
       el.addEventListener("scroll",()=>{if(!appended && el.scrollTop>0){appended=true;
         const row=document.createElement("div");row.textContent="Yesterday appended";el.append(row);}});})();</script>`);
-  s=await scan(growing,"fast");
+  s=await scan(growing,"fast","layout-uncertain");
   assert.equal(s.hits.length,2,JSON.stringify(s.hits));
   assert.ok(s.layoutChanges>=1);
   assert.equal(s.notes.length,0);
   assert.ok(s.hits[1].context.includes("appended"));
+
+  // Prepending above the current viewport may silently miss a new label and
+  // count a moved existing label twice, even if the total count looks correct.
+  const prepending=await setup(`<div id="review-list"><div style="height:150px"></div><div>Yesterday existing</div><div style="height:900px"></div></div>
+    <script>(()=>{const el=document.querySelector("#review-list");let inserted=false;
+      el.addEventListener("scroll",()=>{if(!inserted && el.scrollTop>0){inserted=true;
+        const row=document.createElement("div");row.style.height="80px";row.textContent="Yesterday prepended";el.prepend(row);}});})();</script>`);
+  s=await scan(prepending,"fast","layout-uncertain");
+  assert.ok(s.layoutChanges>=1);
+  assert.equal(s.notes.length,0);
+  const diagnostic=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  for(const event of ["start","finding-top","settle","view","scroll","range-change","bottom-check","restore","finished"])
+    assert.ok(diagnostic.includes(" "+event+" "),event);
+  assert.ok(diagnostic.includes("status=layout-uncertain"));
+  assert.ok(diagnostic.includes("mutations="));
+  assert.ok(!["Yesterday","existing","prepended","review-list","http://","https://"].some(value=>diagnostic.includes(value)),"Diagnostic must not include query, page text, DOM IDs or URL");
+  await page.evaluate(()=>window.__virtualPageFindV1.clear());
+  assert.equal(await page.evaluate(()=>window.__virtualPageFindV1.diagnostics()),"");
 
   const jumping=await setup(`<div id="review-list"><div style="height:1200px"></div></div>
     <script>(()=>{const el=document.querySelector("#review-list");let jumped=false;
@@ -125,7 +144,7 @@ async function reviewRegressions(page,name) {
   s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
   assert.equal(s.status,"partial");
   assert.ok(s.notes.some(n=>n.includes("A scroll jump exceeded one viewport")));
-  console.log(name+": passed dynamic scroll range (informational) and real gap (warning)");
+  console.log(name+": passed append/prepend layout uncertainty, private diagnostics, and real gap warning");
 }
 
 async function popupSizing(page,name) {
@@ -153,6 +172,25 @@ async function popupSizing(page,name) {
   assert.deepEqual(await widths(),{root:389,body:365,scroll:389});
   assert.equal(await page.locator("#container").evaluate(el=>el.getBoundingClientRect().width),365);
   console.log(name+": passed fixed popup width and long-content containment");
+}
+
+async function popupDiagnostics(page,name) {
+  // Exercise the actual popup script with a minimal mock of extension APIs.
+  // This is not a native toolbar popup or a permission/clipboard integration test.
+  await page.evaluate(()=>{
+    const s={status:"layout-uncertain",layoutChanges:1,notes:[],hits:[{context:"[Yesterday]",y:150,x:0}],steps:3,elapsed:300,query:"Yesterday",pace:"fast"};
+    const api={tabs:{query:async()=>[{id:1}]},scripting:{executeScript:async ({args})=>args?[{result:args[0]==="discover"?[{id:0,label:"Test",height:200,range:500}]:args[0]==="diagnostics"?"test diagnostic record":s}]:[]}};
+    Object.defineProperty(globalThis,"browser",{value:api,configurable:true});
+  });
+  await page.addScriptTag({path:fileURLToPath(new URL("src/popup.js",base))});
+  await page.waitForFunction(()=>document.querySelector("#status").textContent.includes("results uncertain"));
+  const warning=await page.locator("#layout").textContent();
+  assert.ok(warning.includes("missing or duplicated"));
+  assert.ok(warning.includes("No user input is required"));
+  await page.locator("#diagnostics summary").click();
+  await page.waitForFunction(()=>document.querySelector("#log").value==="test diagnostic record");
+  assert.equal(await page.locator("#copy-log").isEnabled(),true);
+  console.log(name+": passed popup layout-warning wording and diagnostic display");
 }
 
 try {
