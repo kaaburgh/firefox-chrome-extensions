@@ -22,11 +22,16 @@
     $("copy").disabled=!s.hits.length || running; $("restore").disabled=!has || running;
     $("clear").disabled=!has || running;
     const labels={idle:"Ready",running:s.phase,traversed:"Reached both ends (best effort)",partial:"Incomplete / uncertain"};
-    $("status").textContent=labels[s.status]+(has?" · "+s.hits.length+" matches · "+s.steps+" views · "+Math.round(s.elapsed/1000)+" s":"");
+    const statusLabel=s.status==="traversed" && s.layoutChanges ? "Reached both ends (layout changed; best effort)" : labels[s.status];
+    $("status").textContent=statusLabel+(has?" · "+s.hits.length+" matches · "+s.steps+" views · "+Math.round(s.elapsed/1000)+" s":"");
     $("progress").hidden=!running;
     $("progress").max=Math.max(1,s.range||0);
     $("progress").value=Math.max(0,s.position||0);
     $("notes").textContent=s.notes.join(" ");
+    $("notes").hidden=!s.notes.length;
+    $("layout").hidden=!s.layoutChanges;
+    $("layout").textContent=s.layoutChanges ?
+      "The page resized its scroll area "+s.layoutChanges+" time(s), possibly while loading or rendering content. No user input is required for this. Match counts and jump positions remain best effort." : "";
     const key=JSON.stringify([running,s.hits]);
     if (key!==revision) {
       revision=key;

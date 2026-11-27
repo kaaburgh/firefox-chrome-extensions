@@ -54,6 +54,7 @@ async function test(name, browserType) {
     assert.equal(await page.locator("#list").evaluate(el=>el.scrollTop),initial);
     console.log(name+": passed container discovery, seven/six matches, inline split, repeated labels, jump, restoration, cancellation");
     await reviewRegressions(page, name);
+    await popupSizing(page, name);
   } finally { await browser.close(); }
 }
 
@@ -105,6 +106,53 @@ async function reviewRegressions(page,name) {
   assert.equal(s.hits.length,1,JSON.stringify(s.hits));
   assert.ok(s.hits[0].context.includes("visible"));
   console.log(name+": passed 350ms debounce, pinned duplicate prevention, reverse-flow traversal/restoration, overflow clipping");
+
+  const growing=await setup(`<div id="review-list"><div>Yesterday first</div><div style="height:500px"></div></div>
+    <script>(()=>{const el=document.querySelector("#review-list");let appended=false;
+      el.addEventListener("scroll",()=>{if(!appended && el.scrollTop>0){appended=true;
+        const row=document.createElement("div");row.textContent="Yesterday appended";el.append(row);}});})();</script>`);
+  s=await scan(growing,"fast");
+  assert.equal(s.hits.length,2,JSON.stringify(s.hits));
+  assert.ok(s.layoutChanges>=1);
+  assert.equal(s.notes.length,0);
+  assert.ok(s.hits[1].context.includes("appended"));
+
+  const jumping=await setup(`<div id="review-list"><div style="height:1200px"></div></div>
+    <script>(()=>{const el=document.querySelector("#review-list");let jumped=false;
+      el.addEventListener("scroll",()=>{if(!jumped && el.scrollTop>0){jumped=true;el.scrollTop=900;}});})();</script>`);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),jumping);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
+  s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.status,"partial");
+  assert.ok(s.notes.some(n=>n.includes("A scroll jump exceeded one viewport")));
+  console.log(name+": passed dynamic scroll range (informational) and real gap (warning)");
+}
+
+async function popupSizing(page,name) {
+  const css=await readFile(new URL("src/popup.css",base),"utf8");
+  const html=await readFile(new URL("src/popup.html",base),"utf8");
+  // Test the packaged markup and CSS with a deliberately small initial viewport.
+  // Native toolbar popup sizing/animation itself still needs manual validation.
+  await page.setViewportSize({width:100,height:600});
+  await page.setContent(html.replace(/<link rel="stylesheet" href="popup.css">/,"<style>"+css+"</style>").replace('<script src="popup.js"></script>',""));
+  async function widths(){
+    return page.evaluate(()=>({
+      root:document.documentElement.getBoundingClientRect().width,
+      body:document.body.getBoundingClientRect().width,
+      scroll:document.documentElement.scrollWidth
+    }));
+  }
+  assert.deepEqual(await widths(),{root:389,body:365,scroll:389});
+  await page.setViewportSize({width:389,height:600});
+  await page.evaluate(()=>{
+    const option=document.createElement("option");option.textContent="Very long scroll container ".repeat(20);
+    document.querySelector("#container").append(option);
+    const button=document.createElement("button");button.className="result";button.textContent="X".repeat(500);
+    document.querySelector("#results").append(button);
+  });
+  assert.deepEqual(await widths(),{root:389,body:365,scroll:389});
+  assert.equal(await page.locator("#container").evaluate(el=>el.getBoundingClientRect().width),365);
+  console.log(name+": passed fixed popup width and long-content containment");
 }
 
 try {

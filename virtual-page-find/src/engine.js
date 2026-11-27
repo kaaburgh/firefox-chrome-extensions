@@ -162,8 +162,8 @@
   }
   function snapshot() {
     if (!job) return {status:"idle", hits:[], notes:[]};
-    const {status, notes, steps, phase, query, sensitive, pace, original, root, idx, started} = job;
-    return {status, notes:[...notes], steps, phase, query, sensitive, pace, original,
+    const {status, notes, layoutChanges, steps, phase, query, sensitive, pace, original, root, idx, started} = job;
+    return {status, notes:[...notes], layoutChanges, steps, phase, query, sensitive, pace, original,
       elapsed: Math.round((job.finished || performance.now())-started),
       position:Math.round(top(root)), range:Math.round(max(root)),
       hits:[...idx.items].sort((a,b)=>a.y-b.y || a.x-b.x)};
@@ -206,9 +206,14 @@
       let bottomStable=0, lastRange=max(el), lastPosition=-1;
       while (alive()) {
         const current=top(el), range=max(el);
-        if (Math.abs(range-lastRange)>3) note(j,"Scroll range changed during scan; positions and completeness may be affected.");
+        // Lazy rendering may resize the scroll area without user input.
+        // Keep this visible as a layout caveat, not a failed traversal on its own.
+        if (Math.abs(range-lastRange)>3) {
+          j.layoutChanges++;
+          lastRange=range;
+        }
         if (lastPosition>=0 && current+3<lastPosition) note(j,"Page moved backwards during scan; completeness is uncertain.");
-        lastRange=range; lastPosition=current;
+        lastPosition=current;
         j.steps++;
         const result = collect(el,j.query,j.sensitive,hit=>j.idx.add(hit)!=="limit",j.identities);
         if (result.problem) { note(j,result.problem); break; }
@@ -259,7 +264,7 @@
     const pace=Object.hasOwn(waits,args.pace) ? args.pace : "normal";
     job={root,query,sensitive:!!args.sensitive,pace,original:root.scrollTop,idx:core.index(LIMIT.hits),
       identities:{nodes:new WeakMap(),next:0},
-      status:"running",phase:"Starting",started:performance.now(),steps:0,notes:[],cancel:false,manual:false,reachedEnd:false};
+      status:"running",phase:"Starting",started:performance.now(),steps:0,notes:[],layoutChanges:0,cancel:false,manual:false,reachedEnd:false};
     void run(job);
     return snapshot();
   }
