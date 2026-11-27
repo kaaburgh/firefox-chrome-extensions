@@ -14,9 +14,18 @@ def build(browser):
     dest = ROOT / "dist" / browser
     dest.mkdir(parents=True, exist_ok=True)
     payload = {name: (ROOT / "src" / name).read_bytes() for name in FILES}
+    # Package exactly the icon files referenced by this browser's manifest.
+    icon_paths = set(manifest["icons"].values())
+    icon_paths.update(manifest["action"]["default_icon"].values())
+    for themed in manifest["action"].get("theme_icons", []):
+        icon_paths.update((themed["light"], themed["dark"]))
+    for name in sorted(icon_paths):
+        payload[name] = (ROOT / "src" / name).read_bytes()
     payload["manifest.json"] = (json.dumps(manifest, indent=2) + "\n").encode()
     for name, data in payload.items():
-        (dest / name).write_bytes(data)
+        target = dest / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
     archive = ROOT / "dist" / ("virtual-page-find-" + browser + "-" + version + ".zip")
     with ZipFile(archive, "w", compression=ZIP_DEFLATED) as z:
         for name, data in sorted(payload.items()):

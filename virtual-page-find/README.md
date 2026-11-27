@@ -1,4 +1,4 @@
-# Virtual Page Find (0.1.3)
+# Virtual Page Find (0.1.4)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -33,3 +33,5 @@ Version 0.1.2 adds browser regressions for dynamic range growth, a real traversa
 Expand **Diagnostic log (local)** during or after a scan to inspect the live log and copy it. It records the UTC start time, relative timings, selected speed, viewport geometry, scroll targets and actual positions, mutation counts while waiting, new/total match counts, range changes, cancellation and completion. It contains no page URL, query, matched text, DOM IDs or raw exception messages. Up to 4096 records are kept in tab-local memory; oldest records are dropped if necessary. A new scan, Clear or page reload discards the old log. The popup requests log data only while the section is open. No additional permissions or persistent storage are required.
 
 Version 0.1.3 adds prepend/reflow uncertainty, log privacy and popup warning/display regression checks. The tests do not guarantee completeness after reflow or measure native popup latency.
+
+Version 0.1.4 adds the transparent magnifier / vertical double arrow icon, in 16, 32, 48 and 128 px PNG sizes. Firefox uses theme-specific dark and light toolbar icons; Chrome uses a neutral gray icon. All are derived from the same alpha silhouette. Native toolbar appearance still needs manual validation.
