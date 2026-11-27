@@ -24,7 +24,7 @@
     $("verify").disabled=running || !s.hits.length;
     const v=s.verification;
     $("verification").hidden=!v;
-    $("verification").textContent=v ? (v.running?"Verifying… ":"Verification: ")+v.verified+"/"+v.total+" DOM identities verified; "+v.approximate+" approximate, "+v.notFound+" not found; "+v.checked+"/"+v.total+" checked."+(v.limit<v.total?" First 100 only.":"") : "";
+    $("verification").textContent=v ? (v.running?"Verifying… ":"Verification: ")+v.verified+"/"+v.total+" DOM identities verified; "+v.approximate+" approximate, "+v.notFound+" not found; "+v.checked+"/"+v.total+" checked."+(v.limit<v.total?" First 100 only.":"")+(v.cancel?" Stopped.":"") : "";
     const labels={idle:"Ready",running:s.phase,traversed:"Reached both ends (best effort)","layout-uncertain":"Reached both ends — results uncertain (layout changed)",partial:"Incomplete / uncertain"};
     const statusLabel=verifying?"Verifying positions":labels[s.status];
     $("status").textContent=statusLabel+(has?" · "+s.hits.length+" matches · "+s.steps+" views · "+Math.round(s.elapsed/1000)+" s":"");
@@ -40,14 +40,16 @@
         "Warning: the page resized its scroll area "+s.layoutChanges+" time(s), possibly while loading or rendering content. No user input is required. Matches may be missing or duplicated, and jump positions may be inaccurate." : "";
     $("diagnostics").hidden=!has;
     if (!has) { $("log").value=""; $("copy-log").disabled=true; }
-    const key=JSON.stringify([running,s.hits]);
+    const key=JSON.stringify([running,s.hits,v?.results]);
     if (key!==revision) {
       revision=key;
       const fragment=document.createDocumentFragment();
       for (const [i,h] of s.hits.entries()) {
         const button=document.createElement("button");
         button.type="button"; button.className="result"; button.disabled=running;
-        button.textContent=(i+1)+". "+h.context+" ("+h.y+" px)";
+        const checked=v?.results?.[i];
+        const checkLabel=checked==="verified"?" · Verified":checked==="approximate"?" · Approximate":checked==="not-found"?" · Not found":"";
+        button.textContent=(i+1)+". "+h.context+" ("+h.y+" px)"+checkLabel;
         button.addEventListener("click",()=>void perform(async()=>{const r=await call("jump",{index:i});message(r.found?"DOM identity verified.":r.outcome==="approximate"?"Approximate position: identical text, identity not verified.":"Target could not be verified.");}));
         fragment.append(button);
       }
@@ -75,7 +77,7 @@
     busy=true;
     try {
       const s=await call("snapshot");
-      if(last?.status==="running" && s.status!=="running") await refreshCandidates();
+      if((last?.status==="running"||last?.verification?.running) && s.status!=="running" && !s.verification?.running) await refreshCandidates();
       busy=false; render(s);
       if ($("diagnostics").open) {
         busy=true;

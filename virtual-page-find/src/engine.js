@@ -79,9 +79,11 @@
     return node;
   }
   function makeAnchor(root,first,last,start,end,cache) {
-    for(let p=first.parentElement;p && p!==root;p=p.parentElement) {
-      if(!p.contains(last)) continue;
-      for(const attr of anchorAttrs) {
+    // Prefer application record IDs over incidental HTML IDs, even if the
+    // latter are closer to the text node.
+    for(const attr of anchorAttrs) {
+      for(let p=first.parentElement;p && p!==root;p=p.parentElement) {
+        if(!p.contains(last)) continue;
         const value=p.getAttribute(attr);
         if(!value || value.length>256) continue;
         const key=JSON.stringify([attr,value]);
@@ -208,7 +210,7 @@
     const {status, notes, layoutChanges, steps, phase, query, sensitive, pace, original, root, idx, started} = job;
     return {status, notes:[...notes], layoutChanges, steps, phase, query, sensitive, pace, original,
       logCount:job.log.length,pass:job.pass,rescan:job.rescan,finalLayoutChanges:job.finalLayoutChanges,
-      verification:job.verification ? {...job.verification,results:undefined} : null,
+      verification:job.verification ? {...job.verification,results:[...job.verification.results]} : null,
       elapsed: Math.round((job.finished || performance.now())-started),
       position:Math.round(top(root)), range:Math.round(max(root)),
       hits:[...idx.items].sort((a,b)=>a.y-b.y || a.x-b.x)};
@@ -354,7 +356,7 @@
         try { moveRaw(el,j.original); log(j,"restore",{requested:Math.round(j.original),actual:Math.round(el.scrollTop)}); } catch { note(j,"Could not restore original scroll position."); j.status="partial"; }
       }
       j.phase="Finished"; j.finished=performance.now();
-      log(j,"finished",{status:j.status,steps:j.steps,hits:j.idx.items.length,layoutChanges:j.layoutChanges,reachedEnd:j.reachedEnd,manual:j.manual});
+      log(j,"finished",{status:j.status,steps:j.steps,hits:j.idx.items.length,anchoredHits:j.idx.items.filter(h=>h.anchorKey).length,passes:j.pass,layoutChanges:j.layoutChanges,finalLayoutChanges:j.finalLayoutChanges,reachedEnd:j.reachedEnd,manual:j.manual});
     }
   }
   function start(args) {

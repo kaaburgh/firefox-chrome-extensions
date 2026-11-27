@@ -40,7 +40,7 @@ async function test(name, browserType) {
       return s;
     }
     const s = await scan(false,7);
-    const jump = await page.evaluate(hit=>window.__virtualPageFindV1.jump({index:3}));
+    const jump = await page.evaluate(()=>window.__virtualPageFindV1.jump({index:3}));
     assert.equal(jump.found,true);
     await page.evaluate(()=>window.__virtualPageFindV1.restore());
     await scan(true,6);
@@ -175,7 +175,16 @@ async function navigationRegressions(page,name) {
   await page.evaluate(()=>window.__virtualPageFindV1.verifyAll());
   await page.waitForFunction(()=>!window.__virtualPageFindV1.snapshot().verification.running,null,{timeout:30000});
   const v=await page.evaluate(()=>window.__virtualPageFindV1.snapshot().verification);
-  assert.equal(v.verified,4);assert.equal(v.checked,4);
+  assert.equal(v.verified,4);assert.equal(v.checked,4);assert.deepEqual(v.results,["verified","verified","verified","verified"]);
+  assert.equal(await page.locator("#nav-list").evaluate(el=>el.scrollTop),initial);
+  const diagnostics=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.ok(diagnostics.includes("anchoredHits=4"));
+  assert.ok(!["logical-","oracle-","Yesterday"].some(s=>diagnostics.includes(s)));
+  await page.evaluate(()=>window.__virtualPageFindV1.verifyAll());
+  await page.evaluate(()=>window.__virtualPageFindV1.stop());
+  await page.waitForFunction(()=>!window.__virtualPageFindV1.snapshot().verification.running);
+  const stopped=await page.evaluate(()=>window.__virtualPageFindV1.snapshot().verification);
+  assert.equal(stopped.cancel,true);assert.ok(stopped.checked<4);
   assert.equal(await page.locator("#nav-list").evaluate(el=>el.scrollTop),initial);
   // Identical text at the old position is not proof of identity.
   await page.setContent('<div id="static-list" style="height:200px;width:400px;overflow:auto"><div id="original">Yesterday</div><div style="height:500px"></div></div>');
