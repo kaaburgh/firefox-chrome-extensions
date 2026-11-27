@@ -1,0 +1,25 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Virtual navigation oracle</title>
+<style>body{font:16px system-ui;margin:12px}#nav-list{width:500px;height:240px;overflow:auto;overflow-anchor:none;border:1px solid}#space{position:relative}.row{position:absolute;left:0;right:0;box-sizing:border-box;padding:8px;border-bottom:1px solid #ddd}</style>
+<h1>Virtual navigation oracle</h1><p>Search Yesterday in the main scroll container. Four identical matches have independent oracle markers. The layout grows during the first scan, then stabilizes. Verify all positions should report 4/4.</p>
+<div id="nav-list"><div id="space"></div></div>
+<script>
+(()=>{const el=document.querySelector("#nav-list"), space=document.querySelector("#space");
+const hits=new Set([2,12,23,34]);let expanded=false,timer;
+function draw(){
+ const height=i=>expanded&&i>=4?64:40;
+ const nodes=[];let y=0;
+ for(let i=0;i<40;i++){
+  const h=height(i);
+  if(y+h>el.scrollTop-80&&y<el.scrollTop+el.clientHeight+80){
+   const row=document.createElement("div");row.className="row";
+   row.dataset.itemId="logical-"+i;row.dataset.vpfTestId="oracle-"+i;
+   row.style.top=y+"px";row.style.height=h+"px";
+   row.textContent=hits.has(i)?"Yesterday":"Row "+i;nodes.push(row);
+  }
+  y+=h;
+ }
+ space.style.height=y+"px";space.replaceChildren(...nodes);
+}
+el.addEventListener("scroll",()=>{clearTimeout(timer);timer=setTimeout(()=>{if(el.scrollTop>500)expanded=true;draw();},70);});
+draw();})();
+</script></html>

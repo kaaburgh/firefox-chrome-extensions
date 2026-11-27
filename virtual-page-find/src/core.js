@@ -10,12 +10,22 @@
     return Math.min(max, top + Math.max(1, Math.floor(height * 0.65)));
   }
   function index(limit = 1000) {
-    const items = [], buckets = new Map(), pinned = new Set();
+    const items = [], buckets = new Map(), pinned = new Set(), anchored = new Map();
     return {
       items,
       add(hit) {
         const key = JSON.stringify([hit.match, hit.context]);
         const group = buckets.get(key) || [];
+        if (hit.anchorKey) {
+          const previous=anchored.get(hit.anchorKey);
+          if (previous) {
+            // Keep the latest measured coordinates for the same logical occurrence.
+            Object.assign(previous,hit);
+            return "duplicate";
+          }
+          if (items.length>=limit) return "limit";
+          anchored.set(hit.anchorKey,hit);items.push(hit);return "added";
+        }
         if (hit.pinnedKey ? pinned.has(hit.pinnedKey) :
           group.some(old => !old.pinnedKey && Math.abs(old.y - hit.y) < 3 && Math.abs(old.x - hit.x) < 3)) return "duplicate";
         if (items.length >= limit) return "limit";

@@ -56,6 +56,43 @@
       (el.getAttribute("role") ? " ["+el.getAttribute("role").slice(0,40)+"]" : ""),
       height: Math.round(viewport(el).height), range: Math.round(max(el)) }));
   }
+  // Existing application-owned identifiers, not extension-injected markers.
+  // Deliberately exclude data-index, data-testid and DOM paths without an ID.
+  const anchorAttrs=["data-message-id","data-turn-id","data-item-id","id"];
+  function anchorElement(root,attr,value) {
+    const nodes=root.querySelectorAll("["+attr+"=\""+CSS.escape(value)+"\"]");
+    return nodes.length===1 ? nodes[0] : null;
+  }
+  function pathTo(root,node) {
+    const path=[];
+    while(node!==root) {
+      const parent=node.parentNode;
+      if(!parent || path.length>=40) return null;
+      path.unshift(Array.prototype.indexOf.call(parent.childNodes,node));
+      node=parent;
+    }
+    return path;
+  }
+  function atPath(root,path) {
+    let node=root;
+    for(const index of path) {node=node?.childNodes[index];if(!node)return null;}
+    return node;
+  }
+  function makeAnchor(root,first,last,start,end,cache) {
+    for(let p=first.parentElement;p && p!==root;p=p.parentElement) {
+      if(!p.contains(last)) continue;
+      for(const attr of anchorAttrs) {
+        const value=p.getAttribute(attr);
+        if(!value || value.length>256) continue;
+        const key=JSON.stringify([attr,value]);
+        if(!cache.has(key)) cache.set(key,anchorElement(root,attr,value));
+        if(cache.get(key)!==p)continue;
+        const a=pathTo(p,first), b=pathTo(p,last);
+        if(a && b) return {attr,value,a,b,start,end};
+      }
+    }
+    return null;
+  }
   function collect(el, query, sensitive, onHit, identities) {
     const v = viewport(el);
     if (v.height < 1 || v.width < 1) return { problem:"Selected container is no longer visible." };
@@ -64,7 +101,7 @@
     const originX = isDocument(el) ? 0 : el.getBoundingClientRect().left + el.clientLeft;
     const scrollY = top(el), scrollX = el.scrollLeft;
     const walker = document.createTreeWalker(base, NodeFilter.SHOW_TEXT);
-    const styles = new WeakMap();
+    const styles = new WeakMap(), anchorCache=new Map();
     function style(e) {
       if (!styles.has(e)) styles.set(e,getComputedStyle(e));
       return styles.get(e);
@@ -130,6 +167,12 @@
         const after = text.slice(m.end,m.end+60);
         const hit = { match:text.slice(m.start,m.end), context:(before+"["+text.slice(m.start,m.end)+"]"+after).replace(/\s+/g," "),
           y:Math.round(scrollY+rect.top-originY), x:Math.round(scrollX+rect.left-originX) };
+        const last=offsets.find(p=>p.end>=m.end);
+        const anchor=makeAnchor(base,offsets[first].node,last.node,m.start-offsets[first].start,m.end-last.start,anchorCache);
+        if(anchor) {
+          hit.anchor=anchor;
+          hit.anchorKey=JSON.stringify([anchor.attr,anchor.value,anchor.a,anchor.b,anchor.start,anchor.end,hit.match]);
+        }
         if (pinnedPart) {
           // Persistent sticky/fixed labels have changing coordinates but stable
           // text-node identities. Include the offset to keep separate matches.
@@ -164,7 +207,8 @@
     if (!job) return {status:"idle", hits:[], notes:[]};
     const {status, notes, layoutChanges, steps, phase, query, sensitive, pace, original, root, idx, started} = job;
     return {status, notes:[...notes], layoutChanges, steps, phase, query, sensitive, pace, original,
-      logCount:job.log.length,
+      logCount:job.log.length,pass:job.pass,rescan:job.rescan,finalLayoutChanges:job.finalLayoutChanges,
+      verification:job.verification ? {...job.verification,results:undefined} : null,
       elapsed: Math.round((job.finished || performance.now())-started),
       position:Math.round(top(root)), range:Math.round(max(root)),
       hits:[...idx.items].sort((a,b)=>a.y-b.y || a.x-b.x)};
@@ -219,7 +263,10 @@
       observer = new MutationObserver(records=>{lastMutation=performance.now(); mutations+=records.length;});
       observer.observe(isDocument(el) ? document.documentElement : el,{childList:true,subtree:true,characterData:true});
       for (const type of inputEvents) window.addEventListener(type,interrupt,{capture:true,passive:true});
-      j.phase="Finding top"; log(j,"finding-top");
+      async function scanPass() {
+      const changesBefore=j.layoutChanges;
+      j.reachedEnd=false;
+      j.phase=j.pass===2?"Rechecking top":"Finding top"; log(j,"finding-top",{pass:j.pass});
       let stable=0;
       for (let attempt=0; attempt<10 && alive() && stable<2; attempt++) {
         const oldMax=max(el);
@@ -228,7 +275,7 @@
         log(j,"top-check",{attempt:attempt+1,stable,oldRange:Math.round(oldMax),range:Math.round(max(el))});
       }
       if (stable<2 && alive()) note(j,"Could not establish a stable top; earlier content may be missing.");
-      j.phase="Scanning"; log(j,"scanning");
+      j.phase=j.pass===2?"Second pass":"Scanning"; log(j,"scanning",{pass:j.pass});
       let bottomStable=0, lastRange=max(el), lastPosition=-1;
       while (alive()) {
         const current=top(el), range=max(el);
@@ -279,10 +326,25 @@
         }
         if (actual-current>height+2) note(j,"A scroll jump exceeded one viewport; some content may have been skipped.");
       }
+      j.finalLayoutChanges=j.layoutChanges-changesBefore;
+      }
+      await scanPass();
+      if(j.rescan && j.reachedEnd && j.finalLayoutChanges && !j.notes.length && alive()) {
+        const first={idx:j.idx,identities:j.identities,changes:j.finalLayoutChanges};
+        j.pass=2;
+        j.idx=core.index(LIMIT.hits);j.identities={nodes:new WeakMap(),next:0};
+        log(j,"rescan-start",{firstHits:first.idx.items.length});
+        await scanPass();
+        if(!j.reachedEnd || j.notes.length || j.cancel) {
+          j.idx=first.idx;j.identities=first.identities;
+          j.finalLayoutChanges=first.changes;
+          note(j,"Second pass incomplete; showing first-pass results.");
+        } else log(j,"rescan-finished",{hits:j.idx.items.length,changes:j.finalLayoutChanges});
+      }
       if (j.cancel) note(j,j.manual?"Stopped because you interacted with the page.":"Stopped by user.");
       else if (!el.isConnected) note(j,"Selected scroll container was removed.");
       else if (!j.reachedEnd && (j.steps>=LIMIT.steps || performance.now()-j.started>=LIMIT.ms)) note(j,"Scan safety limit reached.");
-      j.status = j.reachedEnd && !j.cancel && !j.notes.length ? (j.layoutChanges ? "layout-uncertain" : "traversed") : "partial";
+      j.status = j.reachedEnd && !j.cancel && !j.notes.length ? (j.finalLayoutChanges ? "layout-uncertain" : "traversed") : "partial";
     } catch (error) {
       note(j,"Scan error: "+String(error.message || error).slice(0,300),"Scan error (details omitted)"); j.status="partial";
     } finally {
@@ -296,36 +358,98 @@
     }
   }
   function start(args) {
-    if (job?.status==="running") throw new Error("A scan is already running.");
+    if (job?.status==="running" || job?.navBusy || job?.verification?.running) throw new Error("A scan or navigation is already running.");
     const root=candidates[args.id], query=String(args.query || "");
     if (!root?.isConnected) throw new Error("Scroll container disappeared. Reopen the popup.");
     if (!query.trim() || query.length>256) throw new Error("Enter 1–256 characters.");
     const pace=Object.hasOwn(waits,args.pace) ? args.pace : "normal";
     job={root,query,sensitive:!!args.sensitive,pace,original:root.scrollTop,idx:core.index(LIMIT.hits),
       identities:{nodes:new WeakMap(),next:0},log:[],droppedLogs:0,startedUTC:new Date().toISOString(),
-      status:"running",phase:"Starting",started:performance.now(),steps:0,notes:[],layoutChanges:0,cancel:false,manual:false,reachedEnd:false};
+      status:"running",phase:"Starting",started:performance.now(),steps:0,notes:[],layoutChanges:0,finalLayoutChanges:0,pass:1,rescan:args.rescan!==false,cancel:false,manual:false,reachedEnd:false,navBusy:false,verification:null};
     void run(job);
     return snapshot();
   }
+  function ordered(j) {return [...j.idx.items].sort((a,b)=>a.y-b.y || a.x-b.x);}
+  function locateMounted(j,hit) {
+    if(!hit.anchor)return null;
+    const root=j.root, base=isDocument(root)?document.body||root:root;
+    const {attr,value,a,b,start,end}=hit.anchor;
+    const element=anchorElement(base,attr,value);
+    if(!element)return null;
+    const first=atPath(element,a), last=atPath(element,b);
+    if(first?.nodeType!==Node.TEXT_NODE || last?.nodeType!==Node.TEXT_NODE ||
+       start>first.length || end>last.length)return null;
+    const range=document.createRange();
+    range.setStart(first,start);range.setEnd(last,end);
+    if(range.toString()!==hit.match)return null;
+    const rect=Array.from(range.getClientRects()).find(r=>r.width>0 && r.height>0);
+    if(!rect)return null;
+    const origin=isDocument(root)?0:root.getBoundingClientRect().top+root.clientTop;
+    return top(root)+rect.top-origin;
+  }
+  async function navigate(j,hit,index) {
+    const root=j.root;
+    if(!root.isConnected || !hit || !Number.isFinite(hit.y))return {found:false,outcome:"not-found"};
+    const mounted=locateMounted(j,hit);
+    const target=Math.max(0,(mounted ?? hit.y)-viewport(root).height*0.35);
+    move(root,target);
+    await pause(Math.max(500,waits[j.pace])+160);
+    let exact=null, approximate=false;
+    if(root.isConnected) collect(root,j.query,j.sensitive,h=>{
+      if(hit.anchorKey && h.anchorKey===hit.anchorKey && h.context===hit.context) exact=h;
+      if(h.context===hit.context && (hit.pinnedKey ? h.pinnedKey===hit.pinnedKey : Math.abs(h.y-hit.y)<10 && Math.abs(h.x-hit.x)<10))approximate=true;
+      return !exact;
+    },j.identities);
+    const outcome=exact?"verified":approximate?"approximate":"not-found";
+    log(j,"jump",{index:index+1,savedY:hit.y,target:Math.round(target),actual:Math.round(top(root)),range:Math.round(max(root)),anchored:!!hit.anchorKey,mounted:mounted!==null,outcome});
+    return {found:outcome==="verified",outcome};
+  }
   async function jump(args) {
-    if (!job || job.status==="running") throw new Error("Finish the scan first.");
-    const root=job.root, hit=args.hit;
-    if (!root.isConnected || !hit || !Number.isFinite(hit.y)) throw new Error("Result is no longer available.");
-    move(root,Math.max(0,hit.y-viewport(root).height*0.35));
-    await pause(Math.max(500,waits[job.pace])+160);
-    let found=false;
-    collect(root,job.query,job.sensitive,h=>{
-      if (hit.pinnedKey ? h.pinnedKey===hit.pinnedKey : h.context===hit.context && Math.abs(h.y-hit.y)<10 && Math.abs(h.x-hit.x)<10) found=true;
-      return !found;
-    },job.identities);
-    return {found};
+    const j=job;
+    if(!j || j.status==="running" || j.navBusy || j.verification?.running)throw new Error("Finish the current operation first.");
+    const hits=ordered(j),index=args.index;
+    // The popup supplies an index only; never navigate using arbitrary page-supplied coordinates.
+    const hit=hits[index];
+    if(!Number.isInteger(index)||!hit)throw new Error("Result is no longer available.");
+    j.navBusy=true;
+    try{return await navigate(j,hit,index);}finally{j.navBusy=false;}
+  }
+  function verifyAll() {
+    const j=job;
+    if(!j || j.status==="running" || j.navBusy || j.verification?.running)throw new Error("Finish the current operation first.");
+    const hits=ordered(j), limit=Math.min(hits.length,100), original=j.root.scrollTop;
+    const v=j.verification={running:true,cancel:false,manual:false,total:hits.length,limit,checked:0,verified:0,approximate:0,notFound:0,results:[]};
+    const events=["wheel","touchstart","pointerdown","keydown"];
+    const interrupt=e=>{if(e.isTrusted && (e.type!=="keydown" || ["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "].includes(e.key))){v.cancel=true;v.manual=true;}};
+    async function runVerification(){
+      log(j,"verify-start",{total:hits.length,limit});
+      for(const type of events)window.addEventListener(type,interrupt,{capture:true,passive:true});
+      try {
+        for(let i=0;i<limit && !v.cancel && j.root.isConnected;i++){
+          const result=await navigate(j,hits[i],i);
+          if(v.cancel)break;
+          v.checked++;v.results.push(result.outcome);
+          if(result.outcome==="verified")v.verified++;
+          else if(result.outcome==="approximate")v.approximate++;
+          else v.notFound++;
+        }
+      }catch{v.cancel=true;log(j,"verify-error");}
+      finally{
+        for(const type of events)window.removeEventListener(type,interrupt,true);
+        if(!v.manual && j.root.isConnected)try{moveRaw(j.root,original);}catch{log(j,"verify-restore-error");}
+        v.running=false;
+        log(j,"verify-finished",{checked:v.checked,verified:v.verified,approximate:v.approximate,notFound:v.notFound,cancelled:v.cancel});
+      }
+    }
+    void runVerification();
+    return snapshot();
   }
   globalThis.__virtualPageFindV1 = {
-    discover:()=>job?.status==="running"?null:discover(),
+    discover:()=>job?.status==="running"||job?.verification?.running||job?.navBusy?null:discover(),
     start, snapshot, diagnostics,
-    stop:()=>{if(job?.status==="running"){log(job,"stop-request");job.cancel=true;} return snapshot();},
-    jump,
-    restore:()=>{if(job && job.status!=="running" && job.root.isConnected) moveRaw(job.root,job.original); return snapshot();},
-    clear:()=>{if(job?.status==="running") throw new Error("Stop scan first."); job=null; return snapshot();}
+    stop:()=>{if(job?.status==="running"){log(job,"stop-request");job.cancel=true;} if(job?.verification?.running)job.verification.cancel=true; return snapshot();},
+    jump, verifyAll,
+    restore:()=>{if(job && job.status!=="running" && !job.navBusy && !job.verification?.running && job.root.isConnected) moveRaw(job.root,job.original); return snapshot();},
+    clear:()=>{if(job?.status==="running"||job?.navBusy||job?.verification?.running) throw new Error("Stop the current operation first."); job=null; return snapshot();}
   };
 })(globalThis.__vpfCore);

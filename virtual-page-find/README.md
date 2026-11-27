@@ -1,4 +1,4 @@
-# Virtual Page Find (0.1.5)
+# Virtual Page Find (0.2.0)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -37,3 +37,11 @@ Version 0.1.3 adds prepend/reflow uncertainty, log privacy and popup warning/dis
 Version 0.1.4 adds the transparent magnifier / vertical double arrow icon, in 16, 32, 48 and 128 px PNG sizes. Firefox uses theme-specific dark and light toolbar icons; Chrome uses a neutral gray icon. All are derived from the same alpha silhouette. Native toolbar appearance still needs manual validation.
 
 Version 0.1.5 moves the explicit popup width from `:root` to `body` as recommended by Mozilla for standards-mode action popups, following a real Firefox report of a native popup approximately twice the content width. The body is 389px including padding. Tests exercise 100/389/800px viewports with long result, option, warning and diagnostic text. Native Firefox toolbar sizing must still be retested manually.
+
+## Verified navigation (0.2.0)
+
+By default, a scan which reaches both ends but observes range changes repeats once from the top within the original time/view limits. The second pass replaces first-pass results rather than combining incompatible coordinates; if incomplete, the original results are retained with a warning. Turn off **Recheck after layout changes** for a single pass. A stable second pass is not proof of completeness.
+
+Where available, matches store a unique application-owned DOM identifier (data-message-id, data-turn-id, data-item-id or id), relative text-node paths and match offsets. Identical text in different identified elements remains separate. Navigation checks the same identifier, paths, offsets and context; if currently mounted, it recalculates the target position. Without identity evidence, matching text at the expected position is only approximate. IDs may be recycled or change; verification is DOM identity evidence, not semantic ground truth. No DOM mutation, new permission or network request. Diagnostic logs record numeric jump geometry and outcomes, not IDs or text.
+
+**Verify all positions** visits up to 100 results, reports verified/approximate/not found counts, and restores the pre-check scroll position unless manually interrupted. Stop cancels the check. This checks consistency of the recorded matches, not whether the search missed anything. For an independent oracle, serve the repository using the existing local HTTP server and open `http://localhost:8000/tests/navigation-fixture.html`. Search Yesterday in the main container; four identical matches are expected. Playwright additionally asserts each jump lands on its known test-only oracle marker (not read by the extension), and verifies rejection of an identical-text replacement with a different identity.

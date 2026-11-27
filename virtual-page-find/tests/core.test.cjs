@@ -25,6 +25,11 @@ const passed=(function testCore(core) {
   equal(p.add({...sticky,y:500}),"duplicate","sticky moved");
   equal(p.add({...sticky,pinnedKey:"node:10:Yesterday"}),"added","different pinned occurrence");
   equal(p.add(h),"added","ordinary occurrence at same position");
-  return 18;
+  const anchored=core.index(), a={...h,anchorKey:"a"};
+  equal(anchored.add(a),"added","anchor first");
+  equal(anchored.add({...a,y:700}),"duplicate","anchor moves");
+  equal(anchored.items[0].y,700,"anchor coordinate refreshed");
+  equal(anchored.add({...a,anchorKey:"b"}),"added","different identity same text");
+  return 22;
 })(context.__vpfCore);
 console.log(passed+" assertions passed");

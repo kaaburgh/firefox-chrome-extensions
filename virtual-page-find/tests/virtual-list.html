@@ -10,7 +10,7 @@ function draw(){
  const begin=Math.max(0,Math.floor(list.scrollTop/48)-2), end=Math.min(300,begin+15);
  const nodes=[];
  for(let i=begin;i<end;i++){
-   const el=document.createElement("div");el.className="item";el.style.top=i*48+"px";
+   const el=document.createElement("div");el.className="item";el.dataset.itemId="row-"+i;el.dataset.vpfTestId="oracle-"+i;el.style.top=i*48+"px";
    if(i===75){const a=document.createElement("span"),b=document.createElement("span");a.textContent="Yester";b.textContent="day";el.append(a,b);}
    else el.textContent=targets.has(i)?(i===220?"yesterday":"Yesterday"):"Row "+i;
    nodes.push(el);

@@ -15,23 +15,29 @@
   }
   function render(s) {
     last=s;
-    const running=s.status==="running", has=s.status!=="idle";
+    const verifying=!!s.verification?.running, running=s.status==="running"||verifying, has=s.status!=="idle";
     $("start").disabled=running || !candidates.length || busy;
     $("stop").disabled=!running || busy;
-    $("query").disabled=running; $("case").disabled=running; $("container").disabled=running; $("pace").disabled=running;
+    $("query").disabled=running; $("case").disabled=running; $("container").disabled=running; $("pace").disabled=running; $("rescan").disabled=running;
     $("copy").disabled=!s.hits.length || running; $("restore").disabled=!has || running;
     $("clear").disabled=!has || running;
+    $("verify").disabled=running || !s.hits.length;
+    const v=s.verification;
+    $("verification").hidden=!v;
+    $("verification").textContent=v ? (v.running?"Verifying… ":"Verification: ")+v.verified+"/"+v.total+" DOM identities verified; "+v.approximate+" approximate, "+v.notFound+" not found; "+v.checked+"/"+v.total+" checked."+(v.limit<v.total?" First 100 only.":"") : "";
     const labels={idle:"Ready",running:s.phase,traversed:"Reached both ends (best effort)","layout-uncertain":"Reached both ends — results uncertain (layout changed)",partial:"Incomplete / uncertain"};
-    const statusLabel=labels[s.status];
+    const statusLabel=verifying?"Verifying positions":labels[s.status];
     $("status").textContent=statusLabel+(has?" · "+s.hits.length+" matches · "+s.steps+" views · "+Math.round(s.elapsed/1000)+" s":"");
     $("progress").hidden=!running;
-    $("progress").max=Math.max(1,s.range||0);
-    $("progress").value=Math.max(0,s.position||0);
+    $("progress").max=verifying?Math.max(1,v.limit):Math.max(1,s.range||0);
+    $("progress").value=verifying?v.checked:Math.max(0,s.position||0);
     $("notes").textContent=s.notes.join(" ");
     $("notes").hidden=!s.notes.length;
     $("layout").hidden=!s.layoutChanges;
     $("layout").textContent=s.layoutChanges ?
-      "Warning: the page resized its scroll area "+s.layoutChanges+" time(s), possibly while loading or rendering content. No user input is required. Matches may be missing or duplicated, and jump positions may be inaccurate." : "";
+      s.status==="traversed" && s.pass===2 && !s.finalLayoutChanges ?
+        "The first pass encountered layout changes; the second pass reached both ends without further detected range changes. Positions are still best effort." :
+        "Warning: the page resized its scroll area "+s.layoutChanges+" time(s), possibly while loading or rendering content. No user input is required. Matches may be missing or duplicated, and jump positions may be inaccurate." : "";
     $("diagnostics").hidden=!has;
     if (!has) { $("log").value=""; $("copy-log").disabled=true; }
     const key=JSON.stringify([running,s.hits]);
@@ -42,7 +48,7 @@
         const button=document.createElement("button");
         button.type="button"; button.className="result"; button.disabled=running;
         button.textContent=(i+1)+". "+h.context+" ("+h.y+" px)";
-        button.addEventListener("click",async()=>{try { const r=await call("jump",{hit:h}); message(r.found?"Match visible.":"Approximate position only: match could not be verified."); } catch(e){message(e.message);} });
+        button.addEventListener("click",()=>void perform(async()=>{const r=await call("jump",{index:i});message(r.found?"DOM identity verified.":r.outcome==="approximate"?"Approximate position: identical text, identity not verified.":"Target could not be verified.");}));
         fragment.append(button);
       }
       $("results").replaceChildren(fragment);
@@ -84,9 +90,10 @@
     finally {busy=false; if(last) render(last);}
   }
   $("form").addEventListener("submit",e=>{e.preventDefault();void perform(async()=>{
-    render(await call("start",{id:Number($("container").value),query:$("query").value,sensitive:$("case").checked,pace:$("pace").value}));
+    render(await call("start",{id:Number($("container").value),query:$("query").value,sensitive:$("case").checked,pace:$("pace").value,rescan:$("rescan").checked}));
   });});
   $("stop").addEventListener("click",()=>void perform(async()=>render(await call("stop"))));
+  $("verify").addEventListener("click",()=>void perform(async()=>render(await call("verifyAll"))));
   $("restore").addEventListener("click",()=>void perform(async()=>render(await call("restore"))));
   $("clear").addEventListener("click",()=>void perform(async()=>{render(await call("clear"));$("query").value="";}));
   $("diagnostics").addEventListener("toggle",()=>{if ($("diagnostics").open) void poll();});
@@ -104,7 +111,7 @@
       if (!tab?.id) throw new Error("No active tab.");
       await api.scripting.executeScript({target:{tabId:tab.id},files:["core.js","engine.js"]});
       const s=await call("snapshot");
-      if (s.query) { $("query").value=s.query; $("case").checked=s.sensitive; $("pace").value=s.pace || "normal"; }
+      if (s.query) { $("query").value=s.query; $("case").checked=s.sensitive; $("pace").value=s.pace || "normal"; $("rescan").checked=s.rescan!==false; }
       await refreshCandidates();render(s);
       if ($("diagnostics").open) await refreshLog();
       timer=setInterval(poll,400);

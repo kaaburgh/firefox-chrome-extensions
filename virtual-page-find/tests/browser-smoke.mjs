@@ -40,7 +40,7 @@ async function test(name, browserType) {
       return s;
     }
     const s = await scan(false,7);
-    const jump = await page.evaluate(hit=>window.__virtualPageFindV1.jump({hit}),s.hits[3]);
+    const jump = await page.evaluate(hit=>window.__virtualPageFindV1.jump({index:3}));
     assert.equal(jump.found,true);
     await page.evaluate(()=>window.__virtualPageFindV1.restore());
     await scan(true,6);
@@ -54,6 +54,7 @@ async function test(name, browserType) {
     assert.equal(await page.locator("#list").evaluate(el=>el.scrollTop),initial);
     console.log(name+": passed container discovery, seven/six matches, inline split, repeated labels, jump, restoration, cancellation");
     await reviewRegressions(page, name);
+    await navigationRegressions(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -66,7 +67,7 @@ async function reviewRegressions(page,name) {
   }
   async function scan(id, pace="normal", expectedStatus="traversed") {
     const before=await page.locator("#review-list").evaluate(el=>el.scrollTop);
-    await page.evaluate(({id,pace})=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace}),{id,pace});
+    await page.evaluate(({id,pace})=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace,rescan:false}),{id,pace});
     await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
     const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
     assert.equal(s.status,expectedStatus,s.notes.join("; "));
@@ -86,19 +87,19 @@ async function reviewRegressions(page,name) {
   assert.equal(Math.floor(s.hits[0].y/40),20);
   assert.equal(s.pace,"normal");
 
-  const sticky=await setup('<div id="review-list"><div style="position:sticky;top:0;background:white">Yesterday Yesterday</div><div style="height:900px"></div><div>Yesterday</div></div>');
+  const sticky=await setup('<div id="review-list"><div id="sticky-label" style="position:sticky;top:0;background:white">Yesterday Yesterday</div><div style="height:900px"></div><div>Yesterday</div></div>');
   s=await scan(sticky,"fast");
   assert.equal(s.hits.length,3,JSON.stringify(s.hits));
   assert.equal(s.hits.filter(h=>h.pinnedKey).length,2);
-  assert.equal((await page.evaluate(hit=>window.__virtualPageFindV1.jump({hit}),s.hits[0])).found,true);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}))).found,true);
 
-  const reverse=await setup('<div id="review-list" style="display:flex;flex-direction:column-reverse"><div style="flex:none;height:900px">Yesterday newest</div><div style="flex:none;height:50px">Yesterday oldest</div></div>');
+  const reverse=await setup('<div id="review-list" style="display:flex;flex-direction:column-reverse"><div id="newest" style="flex:none;height:900px">Yesterday newest</div><div id="oldest" style="flex:none;height:50px">Yesterday oldest</div></div>');
   await page.locator("#review-list").evaluate(el=>{el.scrollTop=-100;});
   s=await scan(reverse,"fast");
   assert.equal(s.hits.length,2,JSON.stringify(s.hits));
   assert.ok(s.hits[0].context.includes("oldest"));
   assert.ok(s.hits[1].context.includes("newest"));
-  assert.equal((await page.evaluate(hit=>window.__virtualPageFindV1.jump({hit}),s.hits[0])).found,true);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}))).found,true);
   await page.evaluate(()=>window.__virtualPageFindV1.restore());
   assert.equal(await page.locator("#review-list").evaluate(el=>el.scrollTop),-100);
 
@@ -145,6 +146,46 @@ async function reviewRegressions(page,name) {
   assert.equal(s.status,"partial");
   assert.ok(s.notes.some(n=>n.includes("A scroll jump exceeded one viewport")));
   console.log(name+": passed append/prepend layout uncertainty, private diagnostics, and real gap warning");
+}
+
+async function navigationRegressions(page,name) {
+  const html=await readFile(new URL("tests/navigation-fixture.html",base),"utf8");
+  await page.setContent(html);
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#nav-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.status,"traversed",s.notes.join("; "));
+  assert.equal(s.pass,2);assert.ok(s.layoutChanges>0);assert.equal(s.finalLayoutChanges,0);
+  assert.equal(s.hits.length,4);
+  const oracle=[2,12,23,34];
+  for(let i=0;i<oracle.length;i++){
+    const result=await page.evaluate(index=>window.__virtualPageFindV1.jump({index}),i);
+    assert.equal(result.outcome,"verified");
+    // The oracle attribute is never read by the scanner. Verify the actual
+    // logical row is present within the viewport, not just an equal string.
+    const visible=await page.evaluate(expected=>{
+      const el=document.querySelector("#nav-list"),r=el.getBoundingClientRect();
+      const row=document.querySelector('[data-vpf-test-id="oracle-'+expected+'"]');
+      if(!row)return false;const b=row.getBoundingClientRect();return b.top>=r.top && b.bottom<=r.bottom;
+    },oracle[i]);
+    assert.equal(visible,true,"wrong logical row: "+oracle[i]);
+  }
+  const initial=await page.locator("#nav-list").evaluate(el=>el.scrollTop);
+  await page.evaluate(()=>window.__virtualPageFindV1.verifyAll());
+  await page.waitForFunction(()=>!window.__virtualPageFindV1.snapshot().verification.running,null,{timeout:30000});
+  const v=await page.evaluate(()=>window.__virtualPageFindV1.snapshot().verification);
+  assert.equal(v.verified,4);assert.equal(v.checked,4);
+  assert.equal(await page.locator("#nav-list").evaluate(el=>el.scrollTop),initial);
+  // Identical text at the old position is not proof of identity.
+  await page.setContent('<div id="static-list" style="height:200px;width:400px;overflow:auto"><div id="original">Yesterday</div><div style="height:500px"></div></div>');
+  const staticId=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#static-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),staticId);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  await page.evaluate(()=>{document.querySelector("#original").id="replacement";});
+  const ambiguous=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(ambiguous.found,false);assert.equal(ambiguous.outcome,"approximate");
+  console.log(name+": passed two-pass reflow, four independent oracle positions, batch verification and rejection of a wrong identity");
 }
 
 async function popupSizing(page,name) {
