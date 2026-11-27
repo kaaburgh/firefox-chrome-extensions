@@ -18,7 +18,7 @@
     const running=s.status==="running", has=s.status!=="idle";
     $("start").disabled=running || !candidates.length || busy;
     $("stop").disabled=!running || busy;
-    $("query").disabled=running; $("case").disabled=running; $("container").disabled=running;
+    $("query").disabled=running; $("case").disabled=running; $("container").disabled=running; $("pace").disabled=running;
     $("copy").disabled=!s.hits.length || running; $("restore").disabled=!has || running;
     $("clear").disabled=!has || running;
     const labels={idle:"Ready",running:s.phase,traversed:"Reached both ends (best effort)",partial:"Incomplete / uncertain"};
@@ -62,7 +62,7 @@
     finally {busy=false; if(last) render(last);}
   }
   $("form").addEventListener("submit",e=>{e.preventDefault();void perform(async()=>{
-    render(await call("start",{id:Number($("container").value),query:$("query").value,sensitive:$("case").checked}));
+    render(await call("start",{id:Number($("container").value),query:$("query").value,sensitive:$("case").checked,pace:$("pace").value}));
   });});
   $("stop").addEventListener("click",()=>void perform(async()=>render(await call("stop"))));
   $("restore").addEventListener("click",()=>void perform(async()=>render(await call("restore"))));
@@ -77,7 +77,7 @@
       if (!tab?.id) throw new Error("No active tab.");
       await api.scripting.executeScript({target:{tabId:tab.id},files:["core.js","engine.js"]});
       const s=await call("snapshot");
-      if (s.query) { $("query").value=s.query; $("case").checked=s.sensitive; }
+      if (s.query) { $("query").value=s.query; $("case").checked=s.sensitive; $("pace").value=s.pace || "normal"; }
       await refreshCandidates();render(s);
       timer=setInterval(poll,400);
       if(s.status!=="running") $("query").focus();

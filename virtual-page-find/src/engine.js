@@ -7,9 +7,16 @@
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const rootElement = () => document.scrollingElement || document.documentElement;
   const isDocument = el => el === rootElement();
-  const top = el => el.scrollTop;
   const max = el => Math.max(0, el.scrollHeight - el.clientHeight);
-  const move = (el, y) => el.scrollTo({ top: y, left: el.scrollLeft, behavior: "instant" });
+  const reversed = el => {
+    const s = getComputedStyle(el);
+    return !isDocument(el) && /^(inline-)?flex$/.test(s.display) && s.flexDirection === "column-reverse" && s.writingMode === "horizontal-tb";
+  };
+  // Use a physical top-to-bottom coordinate even for negative scrollTop.
+  const top = el => Math.max(0, Math.min(max(el), el.scrollTop + (reversed(el) ? max(el) : 0)));
+  const moveRaw = (el, y) => el.scrollTo({ top: y, left: el.scrollLeft, behavior: "instant" });
+  const move = (el, y) => moveRaw(el, Math.max(0, Math.min(max(el), y)) - (reversed(el) ? max(el) : 0));
+  const waits = { fast: 250, normal: 550, slow: 1000 };
   const intersect = (a,b) => a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
   function viewport(el) {
     let r = { top: 0, left: 0, right: innerWidth, bottom: innerHeight };
@@ -49,7 +56,7 @@
       (el.getAttribute("role") ? " ["+el.getAttribute("role").slice(0,40)+"]" : ""),
       height: Math.round(viewport(el).height), range: Math.round(max(el)) }));
   }
-  function collect(el, query, sensitive, onHit) {
+  function collect(el, query, sensitive, onHit, identities) {
     const v = viewport(el);
     if (v.height < 1 || v.width < 1) return { problem:"Selected container is no longer visible." };
     const base = isDocument(el) ? document.body || el : el;
@@ -61,6 +68,32 @@
     function style(e) {
       if (!styles.has(e)) styles.set(e,getComputedStyle(e));
       return styles.get(e);
+    }
+    // Only inspect clipping ancestors for actual matches, not every text node.
+    function visibleBounds(node) {
+      const bounds = {...v};
+      for (let p=node.parentElement; p && p!==el; p=p.parentElement) {
+        const s=style(p);
+        const clipX=/^(auto|scroll|hidden|clip|overlay)$/.test(s.overflowX);
+        const clipY=/^(auto|scroll|hidden|clip|overlay)$/.test(s.overflowY);
+        if (!clipX && !clipY) continue;
+        const b=p.getBoundingClientRect();
+        if (clipX) {
+          bounds.left=Math.max(bounds.left,b.left+p.clientLeft);
+          bounds.right=Math.min(bounds.right,b.left+p.clientLeft+p.clientWidth);
+        }
+        if (clipY) {
+          bounds.top=Math.max(bounds.top,b.top+p.clientTop);
+          bounds.bottom=Math.min(bounds.bottom,b.top+p.clientTop+p.clientHeight);
+        }
+      }
+      return bounds;
+    }
+    function pinned(node) {
+      for (let p=node.parentElement; p && p!==el; p=p.parentElement) {
+        if (/^(sticky|fixed)$/.test(style(p).position)) return true;
+      }
+      return false;
     }
     function block(e) {
       while (e !== base && e.parentElement &&
@@ -76,15 +109,34 @@
       const offsets = parts.map(node => { const start = offset; offset += node.length; return {node,start,end:offset}; });
       const text = parts.map(n=>n.data).join("");
       for (const m of core.matches(text,query,sensitive)) {
-        const first = offsets.find(p=>p.end>m.start), last = offsets.find(p=>p.end>=m.end);
-        if (!first || !last) continue;
-        range.setStart(first.node,m.start-first.start); range.setEnd(last.node,m.end-last.start);
-        const rect = Array.from(range.getClientRects()).find(r=>r.width>0 && r.height>0 && intersect(r,v));
-        if (!rect) continue;
+        const first = offsets.findIndex(p=>p.end>m.start);
+        if (first<0) continue;
+        let rect=null, clipped=false, pinnedPart=false;
+        for (let i=first; i<offsets.length && offsets[i].start<m.end; i++) {
+          const part=offsets[i];
+          const bounds=visibleBounds(part.node);
+          if (bounds.right<=bounds.left || bounds.bottom<=bounds.top) { clipped=true; break; }
+          range.setStart(part.node,Math.max(0,m.start-part.start));
+          range.setEnd(part.node,Math.min(part.node.length,m.end-part.start));
+          const boxes=Array.from(range.getClientRects()).filter(r=>r.width>0 && r.height>0);
+          const visible=boxes.find(r=>intersect(r,bounds));
+          // A split match must not include a wholly clipped non-whitespace part.
+          if (!visible && part.node.data.slice(Math.max(0,m.start-part.start),Math.min(part.node.length,m.end-part.start)).trim()) { clipped=true; break; }
+          if (!rect && visible) rect=visible;
+          if (pinned(part.node)) pinnedPart=true;
+        }
+        if (clipped || !rect) continue;
         const before = text.slice(Math.max(0,m.start-60),m.start);
         const after = text.slice(m.end,m.end+60);
         const hit = { match:text.slice(m.start,m.end), context:(before+"["+text.slice(m.start,m.end)+"]"+after).replace(/\s+/g," "),
           y:Math.round(scrollY+rect.top-originY), x:Math.round(scrollX+rect.left-originX) };
+        if (pinnedPart) {
+          // Persistent sticky/fixed labels have changing coordinates but stable
+          // text-node identities. Include the offset to keep separate matches.
+          const part=offsets[first];
+          if (!identities.nodes.has(part.node)) identities.nodes.set(part.node,++identities.next);
+          hit.pinnedKey=JSON.stringify([identities.nodes.get(part.node),m.start-part.start,hit.match]);
+        }
         if (onHit(hit) === false) return false;
       }
       return true;
@@ -110,8 +162,8 @@
   }
   function snapshot() {
     if (!job) return {status:"idle", hits:[], notes:[]};
-    const {status, notes, steps, phase, query, sensitive, original, root, idx, started} = job;
-    return {status, notes:[...notes], steps, phase, query, sensitive, original,
+    const {status, notes, steps, phase, query, sensitive, pace, original, root, idx, started} = job;
+    return {status, notes:[...notes], steps, phase, query, sensitive, pace, original,
       elapsed: Math.round((job.finished || performance.now())-started),
       position:Math.round(top(root)), range:Math.round(max(root)),
       hits:[...idx.items].sort((a,b)=>a.y-b.y || a.x-b.x)};
@@ -127,7 +179,7 @@
       }
     };
     const alive = () => !j.cancel && el.isConnected && performance.now()-j.started < LIMIT.ms && j.steps < LIMIT.steps;
-    async function settle(minimum=220) {
+    async function settle(minimum=waits[j.pace]) {
       const start = performance.now();
       let lastChange = start, prev = [top(el),max(el)];
       while (alive()) {
@@ -135,7 +187,7 @@
         const now = performance.now(), current = [top(el),max(el)];
         if (current[0]!==prev[0] || current[1]!==prev[1]) { lastChange=now; prev=current; }
         if (now-start>=minimum && now-Math.max(lastMutation,lastChange)>=160) return;
-        if (now-start>=1500) { note(j,"Some views did not settle; asynchronous content may have been missed."); return; }
+        if (now-start>=Math.max(1500,minimum+500)) { note(j,"Some views did not settle; asynchronous content may have been missed."); return; }
       }
     }
     try {
@@ -146,7 +198,7 @@
       let stable=0;
       for (let attempt=0; attempt<10 && alive() && stable<2; attempt++) {
         const oldMax=max(el);
-        move(el,0); await settle(500);
+        move(el,0); await settle(Math.max(500,waits[j.pace]));
         stable = top(el)<=2 && Math.abs(max(el)-oldMax)<=2 ? stable+1 : 0;
       }
       if (stable<2 && alive()) note(j,"Could not establish a stable top; earlier content may be missing.");
@@ -158,17 +210,17 @@
         if (lastPosition>=0 && current+3<lastPosition) note(j,"Page moved backwards during scan; completeness is uncertain.");
         lastRange=range; lastPosition=current;
         j.steps++;
-        const result = collect(el,j.query,j.sensitive,hit=>j.idx.add(hit)!=="limit");
+        const result = collect(el,j.query,j.sensitive,hit=>j.idx.add(hit)!=="limit",j.identities);
         if (result.problem) { note(j,result.problem); break; }
         const height=viewport(el).height;
         if (height<1) { note(j,"Selected container became invisible."); break; }
         if (current>=range-2) {
-          await settle(650);
+          await settle(Math.max(650,waits[j.pace]));
           if (!alive()) break;
           if (top(el)>=max(el)-2 && Math.abs(max(el)-range)<=2) {
             if (++bottomStable>=2) {
               // Inspect once more after the final quiet period, not before it.
-              const final = collect(el,j.query,j.sensitive,hit=>j.idx.add(hit)!=="limit");
+              const final = collect(el,j.query,j.sensitive,hit=>j.idx.add(hit)!=="limit",j.identities);
               if (final.problem) note(j,final.problem); else j.reachedEnd=true;
               break;
             }
@@ -194,7 +246,7 @@
       observer?.disconnect();
       for (const type of inputEvents) window.removeEventListener(type,interrupt,true);
       if (!j.manual && el.isConnected) {
-        try { move(el,j.original); } catch { note(j,"Could not restore original scroll position."); j.status="partial"; }
+        try { moveRaw(el,j.original); } catch { note(j,"Could not restore original scroll position."); j.status="partial"; }
       }
       j.phase="Finished"; j.finished=performance.now();
     }
@@ -204,7 +256,9 @@
     const root=candidates[args.id], query=String(args.query || "");
     if (!root?.isConnected) throw new Error("Scroll container disappeared. Reopen the popup.");
     if (!query.trim() || query.length>256) throw new Error("Enter 1–256 characters.");
-    job={root,query,sensitive:!!args.sensitive,original:top(root),idx:core.index(LIMIT.hits),
+    const pace=Object.hasOwn(waits,args.pace) ? args.pace : "normal";
+    job={root,query,sensitive:!!args.sensitive,pace,original:root.scrollTop,idx:core.index(LIMIT.hits),
+      identities:{nodes:new WeakMap(),next:0},
       status:"running",phase:"Starting",started:performance.now(),steps:0,notes:[],cancel:false,manual:false,reachedEnd:false};
     void run(job);
     return snapshot();
@@ -214,9 +268,12 @@
     const root=job.root, hit=args.hit;
     if (!root.isConnected || !hit || !Number.isFinite(hit.y)) throw new Error("Result is no longer available.");
     move(root,Math.max(0,hit.y-viewport(root).height*0.35));
-    await pause(500);
+    await pause(Math.max(500,waits[job.pace])+160);
     let found=false;
-    collect(root,job.query,job.sensitive,h=>{if(h.context===hit.context && Math.abs(h.y-hit.y)<10 && Math.abs(h.x-hit.x)<10) found=true; return true;});
+    collect(root,job.query,job.sensitive,h=>{
+      if (hit.pinnedKey ? h.pinnedKey===hit.pinnedKey : h.context===hit.context && Math.abs(h.y-hit.y)<10 && Math.abs(h.x-hit.x)<10) found=true;
+      return !found;
+    },job.identities);
     return {found};
   }
   globalThis.__virtualPageFindV1 = {
@@ -224,7 +281,7 @@
     start, snapshot,
     stop:()=>{if(job?.status==="running") job.cancel=true; return snapshot();},
     jump,
-    restore:()=>{if(job && job.status!=="running" && job.root.isConnected) move(job.root,job.original); return snapshot();},
+    restore:()=>{if(job && job.status!=="running" && job.root.isConnected) moveRaw(job.root,job.original); return snapshot();},
     clear:()=>{if(job?.status==="running") throw new Error("Stop scan first."); job=null; return snapshot();}
   };
 })(globalThis.__vpfCore);

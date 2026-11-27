@@ -4,6 +4,7 @@
 <form id="form"><label for="query">Find text</label><input id="query" required maxlength="256" autocomplete="off" placeholder="Yesterday">
 <label for="container">Scroll container</label><select id="container"></select>
 <label class="check"><input type="checkbox" id="case"> Match case</label>
+<label for="pace">Scan speed (minimum wait per view)</label><select id="pace"><option value="normal" selected>Normal (550 ms)</option><option value="fast">Fast (250 ms)</option><option value="slow">Slow (1000 ms)</option></select>
 <div class="actions"><button id="start" disabled>Scan</button><button type="button" id="stop" disabled>Stop</button></div></form>
 <p class="hint">Scans from top to bottom. Closing this popup does not stop a scan. Interacting with the page stops it. Results are best effort.</p>
 <p id="status" role="status" aria-live="polite">Opening…</p><progress id="progress" hidden></progress>

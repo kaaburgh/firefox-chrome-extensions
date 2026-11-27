@@ -20,6 +20,11 @@ const passed=(function testCore(core) {
   equal(idx.add({...h,y:148}),"added","same text distinct row");
   equal(idx.add({...h,y:196}),"limit","bounded");
   equal(idx.items.length,2,"count");
-  return 14;
+  const p=core.index(), sticky={...h,pinnedKey:"node:0:Yesterday"};
+  equal(p.add(sticky),"added","sticky first");
+  equal(p.add({...sticky,y:500}),"duplicate","sticky moved");
+  equal(p.add({...sticky,pinnedKey:"node:10:Yesterday"}),"added","different pinned occurrence");
+  equal(p.add(h),"added","ordinary occurrence at same position");
+  return 18;
 })(context.__vpfCore);
 console.log(passed+" assertions passed");
