@@ -1,10 +1,10 @@
 /* Pure search helpers. */
 (function(){ globalThis.__vpfCore = (function createCore() {
-  function matches(text, query, sensitive = false) {
-    if (!query) return [];
+  function* matches(text, query, sensitive = false) {
+    if (!query) return;
     const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return Array.from(text.matchAll(new RegExp(escaped, sensitive ? "gu" : "giu")),
-      m => ({ start: m.index, end: m.index + m[0].length }));
+    for (const m of text.matchAll(new RegExp(escaped, sensitive ? "gu" : "giu")))
+      yield { start: m.index, end: m.index + m[0].length };
   }
   function nextTop(top, height, max) {
     return Math.min(max, top + Math.max(1, Math.floor(height * 0.65)));

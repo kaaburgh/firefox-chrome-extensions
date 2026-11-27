@@ -5,12 +5,12 @@ const context=vm.createContext({});
 vm.runInContext(fs.readFileSync(path.join(__dirname,"../src/core.js"),"utf8"),context);
 const passed=(function testCore(core) {
   const equal=(a,b,label)=>{if(JSON.stringify(a)!==JSON.stringify(b))throw new Error(label+": "+JSON.stringify(a));};
-  equal(core.matches("Yesterday yesterday TODAY","yesterday"),[{start:0,end:9},{start:10,end:19}],"case insensitive");
-  equal(core.matches("Yesterday yesterday","Yesterday",true),[{start:0,end:9}],"case sensitive");
-  equal(core.matches("a.b aab [x]","a.b"),[{start:0,end:3}],"literal dot");
-  equal(core.matches("a.b aab [x]","[x]"),[{start:8,end:11}],"literal brackets");
-  equal(core.matches("abc",""),[],"empty");
-  equal(core.matches("🦊 Yesterday","Yesterday"),[{start:3,end:12}],"UTF16 offsets");
+  equal(Array.from(core.matches("Yesterday yesterday TODAY","yesterday")),[{start:0,end:9},{start:10,end:19}],"case insensitive");
+  equal(Array.from(core.matches("Yesterday yesterday","Yesterday",true)),[{start:0,end:9}],"case sensitive");
+  equal(Array.from(core.matches("a.b aab [x]","a.b")),[{start:0,end:3}],"literal dot");
+  equal(Array.from(core.matches("a.b aab [x]","[x]")),[{start:8,end:11}],"literal brackets");
+  equal(Array.from(core.matches("abc","")),[],"empty");
+  equal(Array.from(core.matches("🦊 Yesterday","Yesterday")),[{start:3,end:12}],"UTF16 offsets");
   equal(core.nextTop(100,200,1000),230,"overlap");
   equal(core.nextTop(990,200,1000),1000,"clamp");
   equal(core.nextTop(0,0,10),1,"minimum step");

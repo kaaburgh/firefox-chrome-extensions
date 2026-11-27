@@ -110,8 +110,8 @@
   }
   function snapshot() {
     if (!job) return {status:"idle", hits:[], notes:[]};
-    const {status, notes, steps, phase, query, original, root, idx, started} = job;
-    return {status, notes:[...notes], steps, phase, query, original,
+    const {status, notes, steps, phase, query, sensitive, original, root, idx, started} = job;
+    return {status, notes:[...notes], steps, phase, query, sensitive, original,
       elapsed: Math.round((job.finished || performance.now())-started),
       position:Math.round(top(root)), range:Math.round(max(root)),
       hits:[...idx.items].sort((a,b)=>a.y-b.y || a.x-b.x)};
@@ -166,7 +166,12 @@
           await settle(650);
           if (!alive()) break;
           if (top(el)>=max(el)-2 && Math.abs(max(el)-range)<=2) {
-            if (++bottomStable>=2) { j.reachedEnd=true; break; }
+            if (++bottomStable>=2) {
+              // Inspect once more after the final quiet period, not before it.
+              const final = collect(el,j.query,j.sensitive,hit=>j.idx.add(hit)!=="limit");
+              if (final.problem) note(j,final.problem); else j.reachedEnd=true;
+              break;
+            }
           } else bottomStable=0;
           continue;
         }

@@ -77,7 +77,7 @@
       if (!tab?.id) throw new Error("No active tab.");
       await api.scripting.executeScript({target:{tabId:tab.id},files:["core.js","engine.js"]});
       const s=await call("snapshot");
-      if (s.query) $("query").value=s.query;
+      if (s.query) { $("query").value=s.query; $("case").checked=s.sensitive; }
       await refreshCandidates();render(s);
       timer=setInterval(poll,400);
       if(s.status!=="running") $("query").focus();
