@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Virtual Page Find fixture</title>
+<style>body{margin:12px;font:16px system-ui}#list{height:420px;width: min(800px,90vw);overflow:auto;border:1px solid}#space{position:relative;height:14400px}.item{height:48px;position:absolute;left:0;right:0;padding:10px;box-sizing:border-box;border-bottom:1px solid #ccc}#side{width:150px;height:100px;overflow:auto}</style>
+<h1>Virtual scroll fixture</h1><p>Expected: 7 case-insensitive matches in the main list (rows 0, 18, 19, 75, 149, 220, 299); 6 case-sensitive matches for Yesterday. Rows 18 and 19 have identical text. Row 75 splits the word across inline spans. Initial position is row 150.</p>
+<div id="list"><div id="space"></div></div><div id="side"><div style="height:1000px">Other scroll container</div></div>
+<script>
+const list=document.querySelector("#list"),space=document.querySelector("#space");
+const targets=new Set([0,18,19,75,149,220,299]);
+let timer;
+function draw(){
+ const begin=Math.max(0,Math.floor(list.scrollTop/48)-2), end=Math.min(300,begin+15);
+ const nodes=[];
+ for(let i=begin;i<end;i++){
+   const el=document.createElement("div");el.className="item";el.style.top=i*48+"px";
+   if(i===75){const a=document.createElement("span"),b=document.createElement("span");a.textContent="Yester";b.textContent="day";el.append(a,b);}
+   else el.textContent=targets.has(i)?(i===220?"yesterday":"Yesterday"):"Row "+i;
+   nodes.push(el);
+ }
+ space.replaceChildren(...nodes);
+}
+list.addEventListener("scroll",()=>{clearTimeout(timer);timer=setTimeout(draw,70);});
+list.scrollTop=150*48;draw();
+</script></html>

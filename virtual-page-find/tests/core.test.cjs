@@ -1,0 +1,25 @@
+const fs=require("node:fs");
+const vm=require("node:vm");
+const path=require("node:path");
+const context=vm.createContext({});
+vm.runInContext(fs.readFileSync(path.join(__dirname,"../src/core.js"),"utf8"),context);
+const passed=(function testCore(core) {
+  const equal=(a,b,label)=>{if(JSON.stringify(a)!==JSON.stringify(b))throw new Error(label+": "+JSON.stringify(a));};
+  equal(core.matches("Yesterday yesterday TODAY","yesterday"),[{start:0,end:9},{start:10,end:19}],"case insensitive");
+  equal(core.matches("Yesterday yesterday","Yesterday",true),[{start:0,end:9}],"case sensitive");
+  equal(core.matches("a.b aab [x]","a.b"),[{start:0,end:3}],"literal dot");
+  equal(core.matches("a.b aab [x]","[x]"),[{start:8,end:11}],"literal brackets");
+  equal(core.matches("abc",""),[],"empty");
+  equal(core.matches("🦊 Yesterday","Yesterday"),[{start:3,end:12}],"UTF16 offsets");
+  equal(core.nextTop(100,200,1000),230,"overlap");
+  equal(core.nextTop(990,200,1000),1000,"clamp");
+  equal(core.nextTop(0,0,10),1,"minimum step");
+  const idx=core.index(2), h={match:"Yesterday",context:"[Yesterday]",x:10,y:100};
+  equal(idx.add(h),"added","first");
+  equal(idx.add({...h,y:102}),"duplicate","jitter");
+  equal(idx.add({...h,y:148}),"added","same text distinct row");
+  equal(idx.add({...h,y:196}),"limit","bounded");
+  equal(idx.items.length,2,"count");
+  return 14;
+})(context.__vpfCore);
+console.log(passed+" assertions passed");

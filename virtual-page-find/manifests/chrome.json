@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Virtual Page Find",
+  "version": "0.1.0",
+  "description": "Find visible text across a scrollable or virtualized page.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_title": "Virtual Page Find",
+    "default_popup": "popup.html"
+  }
+}
