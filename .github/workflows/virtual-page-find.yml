@@ -1,0 +1,43 @@
+name: Virtual Page Find
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'virtual-page-find/**'
+      - '.github/workflows/virtual-page-find.yml'
+  pull_request:
+    paths:
+      - 'virtual-page-find/**'
+      - '.github/workflows/virtual-page-find.yml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: virtual-page-find
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Core tests and package build
+        run: |
+          node --check src/core.js
+          node --check src/engine.js
+          node --check src/popup.js
+          node tests/core.test.cjs
+          python3 build.py
+      - name: Upload built packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: virtual-page-find-packages
+          path: virtual-page-find/dist/*.zip
+          if-no-files-found: error
+      - name: Install development-only browser test dependency
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          npx playwright install --with-deps chromium firefox
+      - name: DOM integration tests
+        run: node tests/browser-smoke.mjs all

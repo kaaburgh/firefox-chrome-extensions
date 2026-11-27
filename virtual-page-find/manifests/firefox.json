@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Virtual Page Find",
+  "version": "0.1.1",
+  "description": "Find visible text across a scrollable or virtualized page.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_title": "Virtual Page Find",
+    "default_popup": "popup.html"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "virtual-page-find@kaaburgh",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  }
+}
