@@ -1,7 +1,8 @@
-/* The browser auto-sizes action popups from their contents. Do not use
-   viewport-relative widths here: they can feed back into that calculation. */
-:root { color-scheme: light dark; font: 13px system-ui, sans-serif; width: 389px; min-width: 389px; }
-body { margin: 12px; }
+/* Firefox sizes standards-mode action popups from the preferred width of
+   BODY, not HTML. A width on :root alone can yield an 800px native popup.
+   https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/user_interface/Popups */
+:root { color-scheme: light dark; font: 13px system-ui, sans-serif; }
+body { box-sizing: border-box; width: 389px; min-width: 389px; max-width: 389px; margin: 0; padding: 12px; overflow-wrap: anywhere; }
 h1 { font-size: 17px; margin: 0 0 12px; }
 form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 input,select,button { font: inherit; padding: 6px; min-width: 0; }

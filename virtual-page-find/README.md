@@ -1,4 +1,4 @@
-# Virtual Page Find (0.1.4)
+# Virtual Page Find (0.1.5)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -35,3 +35,5 @@ Expand **Diagnostic log (local)** during or after a scan to inspect the live log
 Version 0.1.3 adds prepend/reflow uncertainty, log privacy and popup warning/display regression checks. The tests do not guarantee completeness after reflow or measure native popup latency.
 
 Version 0.1.4 adds the transparent magnifier / vertical double arrow icon, in 16, 32, 48 and 128 px PNG sizes. Firefox uses theme-specific dark and light toolbar icons; Chrome uses a neutral gray icon. All are derived from the same alpha silhouette. Native toolbar appearance still needs manual validation.
+
+Version 0.1.5 moves the explicit popup width from `:root` to `body` as recommended by Mozilla for standards-mode action popups, following a real Firefox report of a native popup approximately twice the content width. The body is 389px including padding. Tests exercise 100/389/800px viewports with long result, option, warning and diagnostic text. Native Firefox toolbar sizing must still be retested manually.

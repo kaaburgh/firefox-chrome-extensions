@@ -156,12 +156,13 @@ async function popupSizing(page,name) {
   await page.setContent(html.replace(/<link rel="stylesheet" href="popup.css">/,"<style>"+css+"</style>").replace('<script src="popup.js"></script>',""));
   async function widths(){
     return page.evaluate(()=>({
-      root:document.documentElement.getBoundingClientRect().width,
       body:document.body.getBoundingClientRect().width,
-      scroll:document.documentElement.scrollWidth
+      content:document.querySelector("form").getBoundingClientRect().width,
+      bodyScroll:document.body.scrollWidth,
+      rootScroll:document.documentElement.scrollWidth
     }));
   }
-  assert.deepEqual(await widths(),{root:389,body:365,scroll:389});
+  assert.deepEqual(await widths(),{body:389,content:365,bodyScroll:389,rootScroll:389});
   await page.setViewportSize({width:389,height:600});
   await page.evaluate(()=>{
     const option=document.createElement("option");option.textContent="Very long scroll container ".repeat(20);
@@ -169,9 +170,23 @@ async function popupSizing(page,name) {
     const button=document.createElement("button");button.className="result";button.textContent="X".repeat(500);
     document.querySelector("#results").append(button);
   });
-  assert.deepEqual(await widths(),{root:389,body:365,scroll:389});
+  assert.deepEqual(await widths(),{body:389,content:365,bodyScroll:389,rootScroll:389});
+  // Firefox initially measures preferred body width in a viewport up to 800px.
+  // Ensure the BODY itself is explicitly constrained at that size too.
+  await page.setViewportSize({width:800,height:600});
+  await page.evaluate(()=>{
+    document.querySelector("#diagnostics").hidden=false;
+    document.querySelector("#diagnostics").open=true;
+    document.querySelector("#log").value="long diagnostic line ".repeat(100);
+    document.querySelector("#layout").hidden=false;
+    document.querySelector("#layout").textContent="X".repeat(500);
+  });
+  assert.deepEqual(await widths(),{body:389,content:365,bodyScroll:389,rootScroll:800});
+  await page.setViewportSize({width:389,height:600});
+  assert.deepEqual(await widths(),{body:389,content:365,bodyScroll:389,rootScroll:389});
   assert.equal(await page.locator("#container").evaluate(el=>el.getBoundingClientRect().width),365);
-  console.log(name+": passed fixed popup width and long-content containment");
+  await page.evaluate(()=>{document.querySelector("#diagnostics").open=false;document.querySelector("#diagnostics").hidden=true;});
+  console.log(name+": passed fixed BODY width at 100/389/800px viewports and long option/result/log containment");
 }
 
 async function popupDiagnostics(page,name) {
