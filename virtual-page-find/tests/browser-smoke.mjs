@@ -114,6 +114,18 @@ async function reviewRegressions(page,name) {
   }
   console.log(name+": passed unkeyed virtual rows with shared ancestor ID, no false duplicates/merges or verified identities");
 
+  // Rendering may remain busy for more than the previous 1.5s cap.
+  // The match is inserted at the end of a bounded asynchronous update.
+  const slowRender=await setup(`<div id="review-list"><div style="height:180px"></div><div id="slow-row" style="height:40px"></div><div style="height:450px"></div></div>
+    <script>(()=>{const el=document.querySelector("#review-list"),row=document.querySelector("#slow-row");let started=false;
+      el.addEventListener("scroll",()=>{if(!started && el.scrollTop>0){started=true;let n=0;
+        const timer=setInterval(()=>{row.textContent="Rendering "+(++n);if(n===20){clearInterval(timer);row.textContent="Yesterday";}},100);
+      }});})();</script>`);
+  s=await scan(slowRender,"fast");
+  assert.equal(s.hits.length,1,JSON.stringify(s.hits));
+  assert.equal(s.notes.length,0);
+  console.log(name+": passed delayed settling beyond old timeout without suppressing warnings");
+
   const sticky=await setup('<div id="review-list"><div id="sticky-label" style="position:sticky;top:0;background:white">Yesterday Yesterday</div><div style="height:900px"></div><div>Yesterday</div></div>');
   s=await scan(sticky,"fast");
   assert.equal(s.hits.length,3,JSON.stringify(s.hits));

@@ -66,8 +66,18 @@ try {
               const present=attrs.filter(a=>p.hasAttribute(a));
               const testId=p.getAttribute("data-testid")||"";
               const kind=/^conversation-turn-\d+$/.test(testId)?"turn-number":/^conversation-turn-/.test(testId)?"turn-other":"";
-              chain.push({tag:tags.has(p.localName)?p.localName:"other",attrs:present,kind,
-                siblingMessage:!!p.querySelector("[data-message-id], [data-turn-id], [data-testid^='conversation-turn-']")});
+              const records={};
+              if(chain.length>=3 && chain.length<=7){
+                for(const attr of ["data-message-id","data-turn-id","data-item-id"]){
+                  const n=p.querySelectorAll("["+attr+"]").length;
+                  if(n)records[attr]=Math.min(n,20);
+                }
+                const turns=Array.from(p.querySelectorAll("[data-testid^='conversation-turn-']"));
+                if(turns.length)records.turns=Math.min(turns.length,20);
+                const numbered=turns.filter(e=>/^conversation-turn-\d+$/.test(e.getAttribute("data-testid")||"")).length;
+                if(numbered)records.numberedTurns=Math.min(numbered,20);
+              }
+              chain.push({tag:tags.has(p.localName)?p.localName:"other",attrs:present,kind,records});
             }
             if(shapes.size<24)shapes.add(JSON.stringify(chain));
           }

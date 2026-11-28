@@ -17,6 +17,9 @@
   const moveRaw = (el, y) => el.scrollTo({ top: y, left: el.scrollLeft, behavior: "instant" });
   const move = (el, y) => moveRaw(el, Math.max(0, Math.min(max(el), y)) - (reversed(el) ? max(el) : 0));
   const waits = { fast: 250, normal: 550, slow: 1000 };
+  // Some virtualized views keep rendering for longer than the previous 1.5s
+  // timeout. Keep a bounded wait; never declare a still-changing view quiet.
+  const settleLimit = minimum => Math.max(4000,minimum+500);
   const intersect = (a,b) => a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
   function viewport(el) {
     let r = { top: 0, left: 0, right: innerWidth, bottom: innerHeight };
@@ -261,7 +264,7 @@
         const now = performance.now(), current = [top(el),max(el)];
         if (current[0]!==prev[0] || current[1]!==prev[1]) { lastChange=now; prev=current; }
         if (now-start>=minimum && now-Math.max(lastMutation,lastChange)>=160) { record("quiet"); return; }
-        if (now-start>=Math.max(1500,minimum+500)) { record("timeout"); note(j,"Some views did not settle; asynchronous content may have been missed."); return; }
+        if (now-start>=settleLimit(minimum)) { record("timeout"); note(j,"Some views did not settle; asynchronous content may have been missed."); return; }
       }
       record("interrupted");
     }
@@ -423,7 +426,7 @@
         const now=performance.now(), current=[top(root),max(root)];
         if(current[0]!==previous[0] || current[1]!==previous[1]){lastChange=now;previous=current;}
         if(now-begin>=minimum && now-Math.max(lastMutation,lastChange)>=160)return true;
-        if(now-begin>=Math.max(1500,minimum+500))return false;
+        if(now-begin>=settleLimit(minimum))return false;
       }
       return false;
     };
