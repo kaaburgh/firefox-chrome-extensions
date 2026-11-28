@@ -210,7 +210,7 @@
       for (const m of core.matches(text,query,sensitive)) {
         const first = offsets.findIndex(p=>p.end>m.start);
         if (first<0) continue;
-        let rect=null, clipped=false, pinnedPart=false;
+        let rect=null, clipped=false, pinnedPart=false, fullyVisible=true;
         for (let i=first; i<offsets.length && offsets[i].start<m.end; i++) {
           const part=offsets[i];
           const bounds=visibleBounds(part.node);
@@ -219,6 +219,8 @@
           range.setEnd(part.node,Math.min(part.node.length,m.end-part.start));
           const boxes=Array.from(range.getClientRects()).filter(r=>r.width>0 && r.height>0);
           const visible=boxes.find(r=>intersect(r,bounds));
+          const nonWhitespace=part.node.data.slice(Math.max(0,m.start-part.start),Math.min(part.node.length,m.end-part.start)).trim();
+          if(nonWhitespace && (!boxes.length || boxes.some(r=>r.top<bounds.top-0.5 || r.bottom>bounds.bottom+0.5 || r.left<bounds.left-0.5 || r.right>bounds.right+0.5)))fullyVisible=false;
           // A split match must not include a wholly clipped non-whitespace part.
           if (!visible && part.node.data.slice(Math.max(0,m.start-part.start),Math.min(part.node.length,m.end-part.start)).trim()) { clipped=true; break; }
           if (!rect && visible) rect=visible;
@@ -242,7 +244,7 @@
           if (!identities.nodes.has(part.node)) identities.nodes.set(part.node,++identities.next);
           hit.pinnedKey=JSON.stringify([identities.nodes.get(part.node),m.start-part.start,hit.match]);
         }
-        if (onHit(hit) === false) return false;
+        if (onHit(hit,{fullyVisible}) === false) return false;
       }
       return true;
     }
@@ -502,8 +504,8 @@
   }
   function inspectPosition(j,hit) {
     let exact=false, approximate=false;
-    const result=collect(j.root,j.query,j.sensitive,h=>{
-      if(hit.anchorKey && h.anchorKey===hit.anchorKey && h.context===hit.context)exact=true;
+    const result=collect(j.root,j.query,j.sensitive,(h,visibility)=>{
+      if(hit.anchorKey && h.anchorKey===hit.anchorKey && h.context===hit.context && visibility.fullyVisible)exact=true;
       if(h.context===hit.context && (hit.pinnedKey ? h.pinnedKey===hit.pinnedKey : Math.abs(h.y-hit.y)<10 && Math.abs(h.x-hit.x)<10))approximate=true;
       // Collect the entire viewport so a stop caused by an exact match
       // is not mistaken for an inspection limit.
@@ -516,7 +518,8 @@
   function anchoredVisible(j,hit) {
     if(!hit.anchorKey)return false;
     const y=locateMounted(j,hit), v=viewport(j.root);
-    if(y===null || y<top(j.root)-40 || y>top(j.root)+v.height+40)return false;
+    const origin=isDocument(j.root)?0:j.root.getBoundingClientRect().top+j.root.clientTop;
+    if(y===null || y<top(j.root)+v.top-origin-40 || y>top(j.root)+v.bottom-origin+40)return false;
     return inspectPosition(j,hit)==="verified";
   }
   async function confirmVisible(j,hit,s) {

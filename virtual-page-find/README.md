@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.9)
+# Virtual Page Find (0.2.10)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -71,3 +71,5 @@ Version 0.2.7 distinguishes navigation from scan settling: already-visible exact
 Version 0.2.8 extends the bounded local fallback to probe adjacent overlapping viewports even when the direct landing exactly matches the stored coordinate. The real backward jump must not use full replay in the Berlin live test. A regression explicitly unmounts a target at its old location and remounts it only after a small backward move; an identically worded second result does not count as success.
 
 Version 0.2.9 uses the last verified and still-visible result as a relative navigation origin when a nearby logical target is unmounted. It follows the recorded result order (including backward moves) rather than assuming stale pixel coordinates preserve that order across re-estimation. At most 14 overlapping moves or 12 seconds before the existing direct/local/full fallbacks; an exact anchor and context must still match. A regression deliberately inverts the relationship between the current source coordinate and the older target's stored coordinate. No application-specific index or network state is accessed.
+
+Version 0.2.10 requires every non-whitespace fragment of an anchored matching text range to be fully inside its clipping bounds before navigation reports Verified. Scanning still records intersecting text as before. Independent synthetic navigation oracle now checks the actual text range of the known oracle row (rather than requiring the full card to fit); an additional fixture specifically clips the word and requires navigation to make it fully visible. Live individual-jump diagnostics report relative/local step counts and replay starts.

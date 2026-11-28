@@ -237,7 +237,7 @@ try {
                       if(/auto|scroll|hidden|clip|overlay/.test(s.overflowY)){top=Math.max(top,r.top+p.clientTop);bottom=Math.min(bottom,r.top+p.clientTop+p.clientHeight);}
                       if(/auto|scroll|hidden|clip|overlay/.test(s.overflowX)){left=Math.max(left,r.left+p.clientLeft);right=Math.min(right,r.left+p.clientLeft+p.clientWidth);}
                     }
-                    if(rect.bottom>top&&rect.top<bottom&&rect.right>left&&rect.left<right)return true;
+                    if(rect.top>=top-0.5&&rect.bottom<=bottom+0.5&&rect.left>=left-0.5&&rect.right<=right+0.5)return true;
                   }
                 }
                 return false;
@@ -262,7 +262,10 @@ try {
                 const number=(line,key)=>Number(line.match(new RegExp("\\b"+key+"=(-?\\d+)"))?.[1]??-1);
                 return {ordinal,before,after:engine.snapshot().position,visibleBefore,visibleAfter:visible(),seen,lostAfterSeen,returnedToTopAfterSeen,firstSeenMs,samples,elapsedMs:Math.round(performance.now()-started),outcome:result.outcome,
                   direct:direct?{target:number(direct,"target"),actual:number(direct,"actual"),settled:direct.includes("settled=true"),outcome:direct.match(/outcome=(verified|approximate|not-found)/)?.[1]||"unknown"}:null,
-                  method:result.method||final.match(/method=(direct|replay|visible|local|relative)/)?.[1]||"unknown"};
+                  method:result.method||final.match(/method=(direct|replay|visible|local|relative)/)?.[1]||"unknown",
+                  relativeSteps:log.filter(l=>l.includes(" jump-relative index=")).length,
+                  localSteps:log.filter(l=>l.includes(" jump-local index=")).length,
+                  replayStarts:log.filter(l=>l.includes(" jump-replay-start ")).length};
               }finally{clearInterval(timer);}
             },{index,ordinal,oracleMinutes});
             console.log("shared-chat: individual jump "+JSON.stringify(trace));

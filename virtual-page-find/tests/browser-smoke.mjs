@@ -61,6 +61,7 @@ async function test(name, browserType) {
     await busyNavigationRegression(page,name);
     await localRecoveryRegression(page,name);
     await relativeRecoveryRegression(page,name);
+    await clippedNavigationRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -220,7 +221,12 @@ async function navigationRegressions(page,name) {
     const visible=await page.evaluate(expected=>{
       const el=document.querySelector("#nav-list"),r=el.getBoundingClientRect();
       const row=document.querySelector('[data-vpf-test-id="oracle-'+expected+'"]');
-      if(!row)return false;const b=row.getBoundingClientRect();return b.top>=r.top && b.bottom<=r.bottom;
+      if(!row)return false;
+      // The contract is visibility of the matching text, not the entire
+      // 64px card. The independent oracle row is still mandatory.
+      const range=document.createRange();range.selectNodeContents(row);
+      const boxes=Array.from(range.getClientRects()).filter(b=>b.width>0&&b.height>0);
+      return boxes.length>0&&boxes.every(b=>b.top>=r.top+el.clientTop-0.5&&b.bottom<=r.top+el.clientTop+el.clientHeight+0.5&&b.left>=r.left+el.clientLeft-0.5&&b.right<=r.left+el.clientLeft+el.clientWidth+0.5);
     },oracle[i]);
     assert.equal(visible,true,"wrong logical row: "+oracle[i]);
   }
@@ -441,6 +447,29 @@ async function relativeRecoveryRegression(page,name) {
   assert.match(log,/jump-relative-start index=1 source=2 [^\n]*direction=-1/);
   assert.doesNotMatch(log,/jump-replay-start index=1 /);
   console.log(name+": passed backwards record-relative navigation despite inverted stale coordinate direction");
+}
+
+async function clippedNavigationRegression(page,name) {
+  await page.setContent('<!doctype html><style>#edge{height:200px;width:500px;overflow:auto;overflow-anchor:none}#edge-target{font:24px/30px sans-serif;height:80px}</style><div id="edge"><div style="height:400px"></div><div id="edge-target">Yesterday</div><div style="height:600px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#edge").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.snapshot())).hits.length,1);
+  await page.evaluate(()=>{
+    const el=document.querySelector("#edge"),row=document.querySelector("#edge-target");
+    const range=document.createRange();range.selectNodeContents(row);
+    const y=range.getBoundingClientRect().top-el.getBoundingClientRect().top;
+    el.scrollTop=y+8; // clip part of the match itself, not just the row.
+  });
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(result.outcome,"verified");
+  assert.notEqual(result.method,"visible","partly clipped text must not take no-scroll fast path");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#edge"),r=el.getBoundingClientRect(),range=document.createRange();
+    range.selectNodeContents(document.querySelector("#edge-target"));
+    const b=range.getBoundingClientRect();return b.top>=r.top&&b.bottom<=r.bottom;
+  }),true);
+  console.log(name+": passed fully visible matching text requirement");
 }
 
 async function popupSizing(page,name) {
