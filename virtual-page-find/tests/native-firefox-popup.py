@@ -36,8 +36,8 @@ def main():
             try:
                 options = Options()
                 options.binary_location = shutil.which("firefox")
-                options.add_argument("-remote-allow-system-access")
-                service = Service(executable_path=shutil.which("geckodriver"))
+                service = Service(executable_path=shutil.which("geckodriver"),
+                                  service_args=["--allow-system-access"])
                 with webdriver.Firefox(options=options, service=service) as driver:
                     # A real Firefox instance (Xvfb display), with a fresh profile.
                     print("Firefox browserVersion", driver.capabilities.get("browserVersion"), flush=True)
