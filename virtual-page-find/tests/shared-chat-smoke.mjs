@@ -217,7 +217,28 @@ try {
           stage="individual navigation";
           // Exercise actual popup-style individual jump calls, not the
           // verification batch's forward-only shared replay cursor.
-          for(const ordinal of [5,3,3]){
+          // Keep the original backwards/repeated-click regression, then
+          // exercise mixed direction and distance without restoring or
+          // rescanning between individual clicks.
+          const cases=[
+            {ordinal:5,kind:"initial"},
+            {ordinal:3,kind:"original-backward"},
+            {ordinal:3,kind:"repeat"},
+            {ordinal:4,kind:"short-forward"},
+            {ordinal:1,kind:"long-backward"},
+            {ordinal:2,kind:"short-forward"},
+            {ordinal:5,kind:"long-forward"},
+            {ordinal:4,kind:"short-backward"},
+            {ordinal:6,kind:"long-forward"},
+            {ordinal:1,kind:"long-backward"},
+            {ordinal:2,kind:"short-forward"},
+            {ordinal:6,kind:"long-forward"},
+            {ordinal:5,kind:"short-backward"},
+            {ordinal:6,kind:"short-forward"},
+            {ordinal:1,kind:"long-backward"}
+          ];
+          let previous=null;
+          for(const {ordinal,kind} of cases){
             const index=scan.ordinals.indexOf(ordinal);
             const trace=await page.evaluate(async ({index,ordinal,oracleMinutes})=>{
               const engine=globalThis.__virtualPageFindV1;
@@ -242,7 +263,7 @@ try {
                 }
                 return false;
               }
-              const previousLines=engine.diagnostics().split("\n").length;
+              const lastLine=engine.diagnostics().split("\n").filter(Boolean).at(-1);
               const started=performance.now(),before=engine.snapshot().position,visibleBefore=visible();
               let seen=visibleBefore,lostAfterSeen=false,returnedToTopAfterSeen=false,firstSeenMs=visibleBefore?0:null,samples=0;
               function sample(){
@@ -256,22 +277,33 @@ try {
               try{
                 const result=await engine.jump({index});
                 sample();
-                const log=engine.diagnostics().split("\n").slice(previousLines);
+                const jumpMs=Math.round(performance.now()-started);
+                const immediate=visible(), immediateTop=engine.snapshot().position;
+                // Let post-jump reflow happen, as with real individual clicks.
+                await new Promise(resolve=>setTimeout(resolve,500));
+                sample();
+                const allLines=engine.diagnostics().split("\n");
+                const boundary=allLines.lastIndexOf(lastLine);
+                const log=boundary>=0?allLines.slice(boundary+1):[];
                 const direct=log.filter(l=>l.includes(" jump-direct index="+(index+1)+" ")).at(-1)||"";
                 const final=log.filter(l=>l.includes(" jump index="+(index+1)+" ")).at(-1)||"";
                 const number=(line,key)=>Number(line.match(new RegExp("\\b"+key+"=(-?\\d+)"))?.[1]??-1);
-                return {ordinal,before,after:engine.snapshot().position,visibleBefore,visibleAfter:visible(),seen,lostAfterSeen,returnedToTopAfterSeen,firstSeenMs,samples,elapsedMs:Math.round(performance.now()-started),outcome:result.outcome,
+                return {ordinal,before,after:engine.snapshot().position,visibleBefore,visibleAfter:visible(),seen,lostAfterSeen,returnedToTopAfterSeen,firstSeenMs,samples,elapsedMs:jumpMs,immediate,immediateTop,outcome:result.outcome,
                   direct:direct?{target:number(direct,"target"),actual:number(direct,"actual"),settled:direct.includes("settled=true"),outcome:direct.match(/outcome=(verified|approximate|not-found)/)?.[1]||"unknown"}:null,
                   method:result.method||final.match(/method=(direct|replay|visible|local|relative)/)?.[1]||"unknown",
                   relativeSteps:log.filter(l=>l.includes(" jump-relative index=")).length,
                   localSteps:log.filter(l=>l.includes(" jump-local index=")).length,
-                  replayStarts:log.filter(l=>l.includes(" jump-replay-start ")).length};
+                  replayStarts:log.filter(l=>l.includes(" jump-replay-start ")).length,
+                  replaySteps:log.filter(l=>l.includes(" jump-replay-scroll ")).length,
+                  directAttempts:log.filter(l=>l.includes(" jump-direct ")).length,
+                  traceComplete:boundary>=0};
               }finally{clearInterval(timer);}
             },{index,ordinal,oracleMinutes});
-            console.log("shared-chat: individual jump "+JSON.stringify(trace));
-            if(trace.outcome!=="verified"||!trace.visibleAfter)process.exitCode=1;
-            if(ordinal===3 && trace.visibleBefore && trace.method!=="visible")process.exitCode=1;
-            if(ordinal===3 && trace.method==="replay")process.exitCode=1;
+            console.log("shared-chat: individual jump "+JSON.stringify({from:previous,kind,...trace}));
+            if(trace.outcome!=="verified"||!trace.immediate||!trace.visibleAfter||!trace.traceComplete)process.exitCode=1;
+            if(kind==="repeat" && trace.visibleBefore && (trace.method!=="visible"||trace.before!==trace.immediateTop))process.exitCode=1;
+            if(kind==="original-backward" && trace.method==="replay")process.exitCode=1;
+            previous=ordinal;
           }
         }
 
