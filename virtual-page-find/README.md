@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.17)
+# Virtual Page Find (0.2.18)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -91,3 +91,5 @@ Native Firefox popup smoke test: CI installs the unmodified built Firefox ZIP as
 Version 0.2.16: when two direct attempts to establish the top settle at the bottom, use overlapping upward moves for at most 120 attempts or 60 seconds, stopping after three consecutive stalls. Require the same stable-top check as before. If recovery still ends at the bottom, do not report a traversed suffix as reaching the end of a scan; retain partial status and the existing optional second pass. Diagnostics record requested, immediate and settled coordinates. No navigation changes.
 
 Version 0.2.17 simplifies navigation after signed-in Firefox measurements: remove speculative offset and range-delta jumps; prefer bounded record-relative navigation (12 viewports, 20 steps/12 seconds, either direction), including distant mounted targets, when the source remains verified. Normal relative steps wait at least 300 ms and retain the quiet window and extra final visibility confirmation. Direct correction requires current mounted geometry. Replay can correct one clipped exact target rather than accept it as approximate. Scanning retains the early bottom-reset detection, not the unsuccessful minute-long upward recovery. Live Berlin adds first/third, first/last and first/fourth transitions.
+
+Version 0.2.18 preserves the direct fast path for distant mounted targets until an anchored target has actually been observed unmounted during navigation. A timed-out relative step falls back immediately instead of consuming the entire relative budget on a busy viewport. This retains the original busy-viewport regression test unchanged.

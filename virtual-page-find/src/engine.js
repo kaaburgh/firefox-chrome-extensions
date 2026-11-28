@@ -288,7 +288,7 @@
     if (!job) return "";
     return [
       "Virtual Page Find diagnostic log v2",
-      "Extension: 0.2.17",
+      "Extension: 0.2.18",
       "Started UTC: "+job.startedUTC,
       "Status: "+job.status+"; pace: "+job.pace+"; matches: "+job.idx.items.length,
       ...(job.droppedLogs ? ["Earlier records discarded: "+job.droppedLogs] : []),
@@ -630,7 +630,7 @@
       // Layout changes can shift the numerical scroll offset backwards;
       // only give up after consecutive moves make no usable progress.
       stalls=Math.abs(actual-current)<=2?stalls+1:0;
-      if(stalls>=2 || !s.alive())break;
+      if(stalls>=2 || state==="interrupted" || !s.alive())break;
     }
     return "not-found";
   }
@@ -734,6 +734,9 @@
     const root=j.root;
     if(!root.isConnected || !hit || !Number.isFinite(hit.y) || !s.alive())return {found:false,outcome:"not-found"};
     let mounted=locateMounted(j,hit);
+    // Preserve fast direct jumps on ordinary mounted DOM; prefer overlap
+    // for distant mounted targets only after observing virtualization.
+    if(hit.anchorKey && mounted===null)j.sawUnmountedTarget=true;
     let target=Math.max(0,(mounted ?? hit.y)-viewport(root).height*0.35);
     let outcome="not-found", method="direct";
     // Clicking an already visible result should not move the page at all.
@@ -744,7 +747,7 @@
       const height=viewport(root).height;
       const relativeEligible=!!hit.anchorKey && !!source && source.index!==index &&
          Math.abs(hit.y-source.hit.y)<=height*12 &&
-         (mounted===null || Math.abs(mounted-height*0.35-top(root))>height*1.5);
+         (mounted===null || (j.sawUnmountedTarget && Math.abs(mounted-height*0.35-top(root))>height*1.5));
       const sourceVisible=relativeEligible && anchoredVisible(j,source.hit);
       if(j.activeClick)log(j,"nav-choice",{index:index+1,source:source?source.index+1:0,mounted:mounted!==null,anchored:!!hit.anchorKey,
         savedDistance:source?Math.round(hit.y-source.hit.y):0,relativeEligible,sourceVisible:!!sourceVisible,

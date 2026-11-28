@@ -374,7 +374,7 @@ async function busyNavigationRegression(page,name) {
   });
   const before=Date.now(),back=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
   assert.equal(back.outcome,"verified");
-  assert.ok(["direct","relative"].includes(back.method));
+  assert.equal(back.method,"direct");
   assert.ok(Date.now()-before<3000,"exact visible target must not wait for whole-page quiet");
   await page.evaluate(()=>globalThis.__stopBusy());
   const pos=await page.locator("#busy-list").evaluate(el=>el.scrollTop);
@@ -489,7 +489,7 @@ async function clickDiagnosticsRegression(page,name) {
   await page.evaluate(()=>{setTimeout(()=>{document.querySelector("#private-scroll-container").scrollTop=0;},250);});
   await page.waitForTimeout(1400);
   const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
-  assert.ok(log.includes("Extension: 0.2.17"));
+  assert.ok(log.includes("Extension: 0.2.18"));
   assert.match(log,/nav-environment [^\n]*browser=/);
   assert.match(log,/nav-click-start index=2 [^\n]*click=1/);
   assert.match(log,/nav-click-start index=1 previous=2 [^\n]*click=2/);
