@@ -288,7 +288,7 @@
     if (!job) return "";
     return [
       "Virtual Page Find diagnostic log v2",
-      "Extension: 0.2.15",
+      "Extension: 0.2.16",
       "Started UTC: "+job.startedUTC,
       "Status: "+job.status+"; pace: "+job.pace+"; matches: "+job.idx.items.length,
       ...(job.droppedLogs ? ["Earlier records discarded: "+job.droppedLogs] : []),
@@ -337,14 +337,44 @@
       const changesBefore=j.layoutChanges;
       j.reachedEnd=false;
       j.phase=j.pass===2?"Rechecking top":"Finding top"; log(j,"finding-top",{pass:j.pass});
-      let stable=0;
+      let stable=0, rejected=0;
       for (let attempt=0; attempt<10 && alive() && stable<2; attempt++) {
-        const oldMax=max(el);
-        move(el,0); await settle(Math.max(500,waits[j.pace]));
-        stable = top(el)<=2 && Math.abs(max(el)-oldMax)<=2 ? stable+1 : 0;
-        log(j,"top-check",{attempt:attempt+1,stable,oldRange:Math.round(oldMax),range:Math.round(max(el))});
+        const oldMax=max(el), from=top(el);
+        move(el,0); const immediate=top(el);
+        await settle(Math.max(500,waits[j.pace]));
+        const actual=top(el), range=max(el);
+        stable = actual<=2 && Math.abs(range-oldMax)<=2 ? stable+1 : 0;
+        log(j,"top-check",{attempt:attempt+1,stable,from:Math.round(from),target:0,immediate:Math.round(immediate),actual:Math.round(actual),oldRange:Math.round(oldMax),range:Math.round(range)});
+        // A virtualizer can reject a large jump and keep us at the bottom.
+        // Do not repeatedly issue the same command when it is not working.
+        rejected=actual>2 && actual>=range-2 ? rejected+1 : 0;
+        if(rejected>=2)break;
       }
-      if (stable<2 && alive()) note(j,"Could not establish a stable top; earlier content may be missing.");
+      if(rejected>=2 && stable<2 && alive()){
+        const started=performance.now();let stalls=0;
+        log(j,"top-recovery-start",{top:Math.round(top(el)),range:Math.round(max(el))});
+        for(let attempt=0;attempt<120 && alive() && stable<2 && performance.now()-started<60000;attempt++){
+          const from=top(el), oldMax=max(el), height=viewport(el).height;
+          if(height<1)break;
+          const target=Math.max(0,from-Math.max(1,Math.floor(height*0.65)));
+          move(el,target);const immediate=top(el);
+          await settle(from<=2?Math.max(500,waits[j.pace]):waits[j.pace]);
+          const actual=top(el), range=max(el);
+          stable=actual<=2 && Math.abs(range-oldMax)<=2 ? stable+1 : 0;
+          log(j,"top-recovery-step",{attempt:attempt+1,stable,from:Math.round(from),target:Math.round(target),immediate:Math.round(immediate),actual:Math.round(actual),oldRange:Math.round(oldMax),range:Math.round(range)});
+          stalls=actual>2 && actual>=from-2 ? stalls+1 : 0;
+          if(stalls>=3)break;
+        }
+        log(j,"top-recovery-end",{stable,top:Math.round(top(el)),range:Math.round(max(el))});
+      }
+      if (stable<2 && alive()) {
+        note(j,"Could not establish a stable top; earlier content may be missing.");
+        // Being at the bottom without traversing the page is not a scan.
+        if(top(el)>2 && top(el)>=max(el)-2){
+          j.finalLayoutChanges=j.layoutChanges-changesBefore;
+          return;
+        }
+      }
       j.phase=j.pass===2?"Second pass":"Scanning"; log(j,"scanning",{pass:j.pass});
       let bottomStable=0, lastRange=max(el), lastPosition=-1;
       while (alive()) {

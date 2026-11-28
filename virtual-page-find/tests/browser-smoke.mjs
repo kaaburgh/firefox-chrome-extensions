@@ -66,6 +66,7 @@ async function test(name, browserType) {
     await turnKeyRegression(page,name);
     await identityReviewRegression(page,name);
     await predictionRegression(page,name);
+    await topRecoveryRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -488,7 +489,7 @@ async function clickDiagnosticsRegression(page,name) {
   await page.evaluate(()=>{setTimeout(()=>{document.querySelector("#private-scroll-container").scrollTop=0;},250);});
   await page.waitForTimeout(1400);
   const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
-  assert.ok(log.includes("Extension: 0.2.15"));
+  assert.ok(log.includes("Extension: 0.2.16"));
   assert.match(log,/nav-environment [^\n]*browser=/);
   assert.match(log,/nav-click-start index=2 [^\n]*click=1/);
   assert.match(log,/nav-click-start index=1 previous=2 [^\n]*click=2/);
@@ -679,6 +680,40 @@ async function predictionRegression(page,name) {
   assert.ok((log.match(/jump-local index=1 /g)||[]).length>4);
   assert.doesNotMatch(log,/jump-replay-start index=1 /);
   console.log(name+": passed source prediction, long backward movement, corrected retry and extended mounted-target local recovery");
+}
+
+async function topRecoveryRegression(page,name) {
+  for(const locked of [false,true]){
+    await page.setContent('<div id="top-recovery" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div data-item-id="first" style="height:40px">Yesterday</div><div style="height:1600px"></div><div data-item-id="last" style="height:40px">Yesterday</div></div>');
+    await page.evaluate(locked=>{
+      const el=document.querySelector("#top-recovery");
+      el.scrollTop=el.scrollHeight;let previous=el.scrollTop;
+      el.addEventListener("scroll",()=>{
+        if(el.scrollTop<previous&&(locked||previous-el.scrollTop>el.clientHeight)){
+          el.scrollTop=el.scrollHeight;
+        }
+        previous=el.scrollTop;
+      });
+    },locked);
+    await page.waitForTimeout(100);
+    const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#top-recovery").id);
+    await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+    await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
+    const state=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+    const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+    assert.match(log,/top-recovery-start /);
+    if(locked){
+      assert.equal(state.status,"partial");
+      assert.equal(state.hits.length,0);
+      assert.match(log,/finished [^\n]*reachedEnd=false/);
+      assert.equal((log.match(/top-recovery-step /g)||[]).length,6);
+    }else{
+      assert.equal(state.status,"traversed",state.notes.join("; "));
+      assert.deepEqual(state.hits.map(h=>h.anchor.value),["first","last"]);
+      assert.match(log,/top-recovery-end stable=2 top=0 /);
+    }
+  }
+  console.log(name+": passed scan recovery from rejected top jump and bounded failure at locked bottom");
 }
 
 async function popupSizing(page,name) {

@@ -188,8 +188,8 @@ try {
         ["Result limit reached.","result-limit"],
         ["Scan error (details omitted)","scan-error"]
       ]);
-      const scanEvents=/^\d+ms (?:start|finding-top|top-check|scanning|range-change|view|scroll|settle|bottom-check|final-view|rescan-start|rescan-finished|restore|finished) (.*)$/;
-      const scanField=/^(?:step|steps|pass|passes|top|rawTop|range|oldRange|height|viewHeight|newHits|totalHits|hits|anchoredHits|layoutChanges|finalLayoutChanges|from|to|target|actual|requested|attempt|stable|mutations|ignoredMutations|waitMs|collectMs|firstHits|firstWarnings|changes|minimumWait)=-?\d+$|^(?:reachedEnd|firstReachedEnd|manual|reverse)=(?:true|false)$|^reason=(?:quiet|timeout|interrupted)$|^status=(?:partial|traversed|layout-uncertain)$|^pace=(?:fast|normal|slow)$/;
+      const scanEvents=/^\d+ms (?:start|finding-top|top-check|top-recovery-start|top-recovery-step|top-recovery-end|scanning|range-change|view|scroll|settle|bottom-check|final-view|rescan-start|rescan-finished|restore|finished) (.*)$/;
+      const scanField=/^(?:step|steps|pass|passes|top|rawTop|range|oldRange|height|viewHeight|newHits|totalHits|hits|anchoredHits|layoutChanges|finalLayoutChanges|from|to|target|immediate|actual|requested|attempt|stable|mutations|ignoredMutations|waitMs|collectMs|firstHits|firstWarnings|changes|minimumWait)=-?\d+$|^(?:reachedEnd|firstReachedEnd|manual|reverse)=(?:true|false)$|^reason=(?:quiet|timeout|interrupted)$|^status=(?:partial|traversed|layout-uncertain)$|^pace=(?:fast|normal|slow)$/;
       for(const line of scanLog.split("\n")){
         const warning=line.match(/^(\d+ms warning) reason=(.*)$/);
         if(warning){console.log(warning[1]+" code="+(safeReasons.get(warning[2])||"other"));continue;}

@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.15)
+# Virtual Page Find (0.2.16)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -87,3 +87,5 @@ Version 0.2.14 experiments with two bounded navigation optimizations. For an unm
 Version 0.2.15 responds to live 0.2.14 traces: a long failed jump to an already mounted target is not repeated, and local recovery may continue up to ten overlapping moves while the exact target remains mounted (only four speculative probes without it). For backward navigation only, the existing relative strategy now covers up to 12 saved viewports and 20 steps within its unchanged 12-second budget. This avoids a premature full replay when a mounted target is just beyond the former four-step limit or a verified older target is slightly beyond nine viewports. No new strategy or verification relaxation; wait timings are unchanged.
 
 Native Firefox popup smoke test: CI installs the unmodified built Firefox ZIP as a temporary add-on in a real Firefox window on Xvfb, opens a local HTTP page, pins and clicks its toolbar button, and checks that the extension's popup document opens in a visible browser-chrome panel. This complements the mocked popup DOM tests and does not cover macOS-specific browser UI behavior.
+
+Version 0.2.16: when two direct attempts to establish the top settle at the bottom, use overlapping upward moves for at most 120 attempts or 60 seconds, stopping after three consecutive stalls. Require the same stable-top check as before. If recovery still ends at the bottom, do not report a traversed suffix as reaching the end of a scan; retain partial status and the existing optional second pass. Diagnostics record requested, immediate and settled coordinates. No navigation changes.
