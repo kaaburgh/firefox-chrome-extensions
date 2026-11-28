@@ -62,6 +62,7 @@ async function test(name, browserType) {
     await localRecoveryRegression(page,name);
     await relativeRecoveryRegression(page,name);
     await clippedNavigationRegression(page,name);
+    await clickDiagnosticsRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -472,6 +473,36 @@ async function clippedNavigationRegression(page,name) {
   console.log(name+": passed fully visible matching text requirement");
 }
 
+async function clickDiagnosticsRegression(page,name) {
+  await page.setContent('<!doctype html><div id="private-scroll-container" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div style="height:300px"></div><div id="private-first">Yesterday private first</div><div style="height:800px"></div><div id="private-second">Yesterday private second</div><div style="height:400px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#private-scroll-container").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}))).outcome,"verified");
+  // The new click starts a separate trace, then a delayed reflow moves
+  // the verified target out of view after the jump has returned.
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}))).outcome,"verified");
+  await page.evaluate(()=>{setTimeout(()=>{document.querySelector("#private-scroll-container").scrollTop=0;},250);});
+  await page.waitForTimeout(1400);
+  const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.ok(log.includes("Extension: 0.2.11"));
+  assert.match(log,/nav-environment [^\n]*browser=/);
+  assert.match(log,/nav-click-start index=2 [^\n]*click=1/);
+  assert.match(log,/nav-click-start index=1 previous=2 [^\n]*click=2/);
+  assert.match(log,/nav-choice [^\n]*reason=target-mounted/);
+  assert.match(log,/nav-move strategy=direct [^\n]*immediate=/);
+  assert.match(log,/nav-settle [^\n]*firstVisible=/);
+  assert.match(log,/nav-direct-state [^\n]*sameAnchor=/);
+  assert.match(log,/nav-click-end index=1 [^\n]*outcome=verified/);
+  assert.match(log,/nav-post click=2 index=1 [^\n]*outcome=not-found/);
+  const state=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(state.lastJump.index,1);assert.equal(state.lastJump.click,2);assert.equal(state.lastJump.outcome,"verified");
+  assert.ok(!["Yesterday","private first","private second","private-first","private-second","private-scroll-container","http://","https://"].some(v=>log.includes(v)));
+  // A popup reads the same journal through the engine's public API.
+  assert.equal(await page.evaluate(()=>window.__virtualPageFindV1.diagnostics()),log);
+  console.log(name+": passed per-click diagnostics, correlated moves and settles, late reflow and privacy");
+}
+
 async function popupSizing(page,name) {
   const css=await readFile(new URL("src/popup.css",base),"utf8");
   const html=await readFile(new URL("src/popup.html",base),"utf8");
@@ -518,7 +549,7 @@ async function popupDiagnostics(page,name) {
   // Exercise the actual popup script with a minimal mock of extension APIs.
   // This is not a native toolbar popup or a permission/clipboard integration test.
   await page.evaluate(()=>{
-    const s={status:"layout-uncertain",layoutChanges:1,notes:[],hits:[{context:"[Yesterday]",y:150,x:0}],steps:3,elapsed:300,query:"Yesterday",pace:"fast"};
+    const s={status:"layout-uncertain",layoutChanges:1,notes:[],hits:[{context:"[Yesterday]",y:150,x:0}],steps:3,elapsed:300,query:"Yesterday",pace:"fast",lastJump:{index:1,method:"direct",outcome:"verified",elapsedMs:725}};
     const api={tabs:{query:async()=>[{id:1}]},scripting:{executeScript:async ({args})=>args?[{result:args[0]==="discover"?[{id:0,label:"Test",height:200,range:500}]:args[0]==="diagnostics"?"test diagnostic record":s}]:[]}};
     Object.defineProperty(globalThis,"browser",{value:api,configurable:true});
   });
@@ -530,6 +561,7 @@ async function popupDiagnostics(page,name) {
   await page.locator("#diagnostics summary").click();
   await page.waitForFunction(()=>document.querySelector("#log").value==="test diagnostic record");
   assert.equal(await page.locator("#copy-log").isEnabled(),true);
+  assert.match(await page.locator("#last-jump").textContent(),/Last click: #1 · direct · verified · 0.72 s|Last click: #1 · direct · verified · 0.73 s/);
   console.log(name+": passed popup layout-warning wording and diagnostic display");
 }
 

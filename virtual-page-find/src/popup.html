@@ -15,6 +15,7 @@
 <p id="verification" role="status" hidden></p>
 <div id="results" aria-label="Matches"></div>
 <details id="diagnostics" hidden><summary>Diagnostic log (local)</summary>
-<p class="hint">Timing, geometry and counts only. No page text, query or URL. Cleared on a new scan, Clear or reload.</p>
+<p id="last-jump" class="hint" hidden></p>
+<p class="hint">Every result click is logged automatically, including strategy, geometry, DOM identity checks and late reflow. No page text, query, URL or DOM ID values. Kept when the popup closes; cleared on a new scan, Clear or page reload.</p>
 <textarea id="log" readonly aria-label="Diagnostic log" rows="7" wrap="off" spellcheck="false"></textarea>
 <button type="button" id="copy-log" disabled>Copy diagnostic log</button></details><script src="popup.js"></script></body></html>

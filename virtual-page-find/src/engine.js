@@ -272,6 +272,7 @@
     const {status, notes, layoutChanges, steps, phase, query, sensitive, pace, original, root, idx, started} = job;
     return {status, notes:[...notes], layoutChanges, steps, phase, query, sensitive, pace, original,
       logCount:job.log.length,pass:job.pass,rescan:job.rescan,finalLayoutChanges:job.finalLayoutChanges,
+      navBusy:job.navBusy,lastJump:job.lastJump?{...job.lastJump}:null,
       verification:job.verification ? {...job.verification,results:[...job.verification.results]} : null,
       elapsed: Math.round((job.finished || performance.now())-started),
       position:Math.round(top(root)), range:Math.round(max(root)),
@@ -281,12 +282,13 @@
   // numeric/boolean metadata. Never include page text, query, URL, DOM IDs or raw exceptions.
   function log(j, event, fields={}) {
     if (j.log.length>=4096) { j.log.shift(); j.droppedLogs++; }
-    j.log.push({ms:Math.round(performance.now()-j.started),event,...fields});
+    j.log.push({ms:Math.round(performance.now()-j.started),event,...fields,...(j.activeClick?{click:j.activeClick}:{})});
   }
   function diagnostics() {
     if (!job) return "";
     return [
-      "Virtual Page Find diagnostic log v1",
+      "Virtual Page Find diagnostic log v2",
+      "Extension: 0.2.11",
       "Started UTC: "+job.startedUTC,
       "Status: "+job.status+"; pace: "+job.pace+"; matches: "+job.idx.items.length,
       ...(job.droppedLogs ? ["Earlier records discarded: "+job.droppedLogs] : []),
@@ -449,21 +451,23 @@
     return snapshot();
   }
   function ordered(j) {return [...j.idx.items].sort((a,b)=>a.y-b.y || a.x-b.x);}
-  function locateMounted(j,hit) {
-    if(!hit.anchor)return null;
+  function locateMounted(j,hit,detail=null) {
+    const fail=reason=>{if(detail)detail.mountReason=reason;return null;};
+    if(!hit.anchor)return fail("no-anchor");
     const root=j.root, base=isDocument(root)?document.body||root:root;
     const {attr,value,a,b,start,end}=hit.anchor;
     let element=anchorElement(base,attr,value);
-    if(!element)return null;
-    for(let i=0;i<(hit.anchor.up||0);i++){element=element.parentElement;if(!element || element===base)return null;}
+    if(!element)return fail("absent-or-ambiguous-id");
+    for(let i=0;i<(hit.anchor.up||0);i++){element=element.parentElement;if(!element || element===base)return fail("wrapper-changed");}
     const first=atPath(element,a), last=atPath(element,b);
     if(first?.nodeType!==Node.TEXT_NODE || last?.nodeType!==Node.TEXT_NODE ||
-       start>first.length || end>last.length)return null;
+       start>first.length || end>last.length)return fail("text-path-changed");
     const range=document.createRange();
     range.setStart(first,start);range.setEnd(last,end);
-    if(range.toString()!==hit.match)return null;
+    if(range.toString()!==hit.match)return fail("text-changed");
     const rect=Array.from(range.getClientRects()).find(r=>r.width>0 && r.height>0);
-    if(!rect)return null;
+    if(!rect)return fail("no-rendered-box");
+    if(detail)detail.mountReason="mounted";
     const origin=isDocument(root)?0:root.getBoundingClientRect().top+root.clientTop;
     return top(root)+rect.top-origin;
   }
@@ -471,11 +475,19 @@
   // the same forward viewport traversal when the direct jump cannot find
   // the recorded occurrence. A batch reuses its forward traversal cursor.
   function navigationSession(j, cancelled) {
-    const root=j.root, started=performance.now();
-    let lastMutation=started;
-    const observer=new MutationObserver(records=>{if(mutationTouchesView(root,records))lastMutation=performance.now();});
+    const root=j.root, started=performance.now(), tracing=!!j.activeClick;
+    let lastMutation=started, mutations=0, relevantMutations=0;
+    const observer=new MutationObserver(records=>{
+      mutations+=records.length;
+      if(mutationTouchesView(root,records)){lastMutation=performance.now();relevantMutations+=records.length;}
+    });
     observer.observe(isDocument(root)?document.documentElement:root,{childList:true,subtree:true,characterData:true});
     const session={replay:false,steps:0,close:()=>observer.disconnect()};
+    session.move=(target,strategy)=>{
+      const before=top(root), oldRange=max(root), requested=Math.max(0,Math.min(oldRange,target));
+      move(root,target);session.steps++;
+      if(tracing)log(j,"nav-move",{strategy,step:session.steps,from:Math.round(before),target:Math.round(target),clamped:Math.round(requested),immediate:Math.round(top(root)),oldRange:Math.round(oldRange),range:Math.round(max(root)),height:Math.round(viewport(root).height)});
+    };
     session.alive=()=>!cancelled() && root.isConnected && session.steps<LIMIT.steps && performance.now()-started<LIMIT.ms;
     // Navigation can finish while unrelated content is still changing,
     // provided the exact anchored occurrence stays visible. Scanning uses
@@ -483,36 +495,70 @@
     session.settle=async(minimum=waits[j.pace],hit=null)=>{
       const begin=performance.now();
       let lastChange=begin, previous=[top(root),max(root)], visibleSince=null, lastCheck=-Infinity;
+      const before=previous, initialMutations=mutations, initialRelevant=relevantMutations;
+      let changes=0, firstVisible=-1, visibleSamples=0, lostVisibility=0, minTop=before[0],maxTop=before[0],minRange=before[1],maxRange=before[1];
+      const finish=state=>{
+        if(tracing)log(j,"nav-settle",{step:session.steps,state,minimum,waitMs:Math.round(performance.now()-begin),from:Math.round(before[0]),actual:Math.round(top(root)),oldRange:Math.round(before[1]),range:Math.round(max(root)),minTop:Math.round(minTop),maxTop:Math.round(maxTop),minRange:Math.round(minRange),maxRange:Math.round(maxRange),changes,mutations:mutations-initialMutations,relevantMutations:relevantMutations-initialRelevant,firstVisible,visibleSamples,lostVisibility});
+        return state;
+      };
       while(session.alive()){
         await pause(50);
-        if(!session.alive())return "interrupted";
+        if(!session.alive())return finish("interrupted");
         const now=performance.now(), current=[top(root),max(root)];
-        if(current[0]!==previous[0] || current[1]!==previous[1]){lastChange=now;previous=current;}
+        if(current[0]!==previous[0] || current[1]!==previous[1]){lastChange=now;previous=current;changes++;}
+        minTop=Math.min(minTop,current[0]);maxTop=Math.max(maxTop,current[0]);minRange=Math.min(minRange,current[1]);maxRange=Math.max(maxRange,current[1]);
         if(hit?.anchorKey && now-lastCheck>=95){
           lastCheck=now;
           if(anchoredVisible(j,hit)){
+            if(firstVisible<0)firstVisible=Math.round(now-begin);
+            visibleSamples++;
             if(visibleSince===null)visibleSince=now;
-            if(now-begin>=minimum && now-visibleSince>=160)return "target-visible";
-          }else visibleSince=null;
+            if(now-begin>=minimum && now-visibleSince>=160)return finish("target-visible");
+          }else {if(visibleSince!==null)lostVisibility++;visibleSince=null;}
         }
-        if(now-begin>=minimum && now-Math.max(lastMutation,lastChange)>=160)return "quiet";
-        if(now-begin>=settleLimit(minimum))return now-lastChange>=160?"geometry-quiet":"interrupted";
+        if(now-begin>=minimum && now-Math.max(lastMutation,lastChange)>=160)return finish("quiet");
+        if(now-begin>=settleLimit(minimum))return finish(now-lastChange>=160?"geometry-quiet":"interrupted");
       }
-      return "interrupted";
+      return finish("interrupted");
     };
     return session;
   }
-  function inspectPosition(j,hit) {
-    let exact=false, approximate=false;
+  function inspectPosition(j,hit,detail=null) {
+    let exact=false, approximate=false, candidates=0, sameContext=0, sameAnchor=0, clippedAnchor=0, wrongContext=0;
     const result=collect(j.root,j.query,j.sensitive,(h,visibility)=>{
+      if(detail){
+        candidates++;
+        if(h.context===hit.context)sameContext++;
+        if(hit.anchorKey && h.anchorKey===hit.anchorKey){
+          sameAnchor++;
+          if(h.context!==hit.context)wrongContext++;
+          else if(!visibility.fullyVisible)clippedAnchor++;
+        }
+      }
       if(hit.anchorKey && h.anchorKey===hit.anchorKey && h.context===hit.context && visibility.fullyVisible)exact=true;
       if(h.context===hit.context && (hit.pinnedKey ? h.pinnedKey===hit.pinnedKey : Math.abs(h.y-hit.y)<10 && Math.abs(h.x-hit.x)<10))approximate=true;
       // Collect the entire viewport so a stop caused by an exact match
       // is not mistaken for an inspection limit.
       return true;
     },j.identities);
+    if(detail)Object.assign(detail,{candidates,sameContext,sameAnchor,clippedAnchor,wrongContext,inspectionLimited:!!result.problem});
     if(result.problem)return "not-found";
     return exact?"verified":approximate?"approximate":"not-found";
+  }
+  // No text, attribute values, page title, URL, user agent string, or
+  // exception messages leave the diagnostic path. Result ordinals are
+  // enough to correlate a manual test with the user's list.
+  function targetState(j,hit) {
+    const detail={}, root=j.root, v=viewport(root), y=locateMounted(j,hit,detail);
+    return {top:Math.round(top(root)),rawTop:Math.round(root.scrollTop),range:Math.round(max(root)),height:Math.round(v.height),
+      mountedY:y===null?-1:Math.round(y),...detail, ...(()=>{const d={};const outcome=inspectPosition(j,hit,d);return {...d,outcome};})()};
+  }
+  function environment(j) {
+    const ua=navigator.userAgent, firefox=ua.match(/Firefox\/(\d+)/), chrome=ua.match(/(?:Chrome|Chromium)\/(\d+)/);
+    const platform=/Macintosh|Mac OS X/.test(ua)?"mac":/Windows/.test(ua)?"windows":/Android/.test(ua)?"android":/Linux/.test(ua)?"linux":"other";
+    log(j,"nav-environment",{browser:firefox?"firefox":chrome?"chromium":"other",major:Number((firefox||chrome)?.[1]||0),platform,
+      viewportWidth:innerWidth,viewportHeight:innerHeight,devicePixelRatio:Math.round(devicePixelRatio*100)/100,
+      visualScale:Math.round((window.visualViewport?.scale||1)*100)/100,offsetMinutes:new Date().getTimezoneOffset(),documentRoot:isDocument(j.root),reverse:reversed(j.root)});
   }
   // Cheap mounted-coordinate gate before the full, clipping-aware check.
   function anchoredVisible(j,hit) {
@@ -552,7 +598,7 @@
       if(Math.abs(delta)<=2)delta=direction*step;
       const target=Math.max(0,Math.min(max(root),current+Math.sign(delta)*Math.min(Math.abs(delta),step)));
       if(Math.abs(target-current)<=2)break;
-      move(root,target);s.steps++;
+      s.move(target,"relative");
       const state=await s.settle(waits[j.pace],hit);
       const actual=top(root);
       const exact=s.alive() && inspectPosition(j,hit)==="verified";
@@ -594,7 +640,7 @@
       const target=Math.max(0,Math.min(max(root),current+Math.sign(delta)*Math.min(Math.abs(delta),cap)));
       if(Math.abs(target-current)<=2 || visited.some(y=>Math.abs(y-target)<=2))continue;
       visited.push(target);
-      move(root,target);s.steps++;
+      s.move(target,"local");
       const state=await s.settle(waits[j.pace],hit);
       const actual=top(root);
       const exact=state!=="interrupted" && s.alive() && inspectPosition(j,hit)==="verified";
@@ -612,7 +658,7 @@
       let stable=0;
       for(let attempt=0;attempt<10 && stable<2 && s.alive();attempt++){
         const oldRange=max(root);
-        move(root,0);s.steps++;
+        s.move(0,"replay-top");
         if(await s.settle(Math.max(500,waits[j.pace]))==="interrupted")return "not-found";
         stable=top(root)<=2 && Math.abs(max(root)-oldRange)<=2?stable+1:0;
       }
@@ -628,7 +674,7 @@
       // accept the same context and coordinate as during the scan.
       if((!hit.anchorKey && current>hit.y+10) || current>=range-2 || height<1)return "not-found";
       const target=core.nextTop(current,height,range);
-      move(root,target);s.steps++;
+      s.move(target,"replay");
       const settled=await s.settle(waits[j.pace],hit);
       if(settled==="interrupted")return "not-found";
       if(settled==="target-visible" && inspectPosition(j,hit)==="verified")return "verified";
@@ -655,28 +701,37 @@
     }else if(!s.replay && s.alive()){
       const source=j.lastVerified;
       const height=viewport(root).height;
-      if(mounted===null && hit.anchorKey && source && source.index!==index &&
-         Math.abs(hit.y-source.hit.y)<=height*9 && anchoredVisible(j,source.hit)){
+      const relativeEligible=mounted===null && !!hit.anchorKey && !!source && source.index!==index &&
+         Math.abs(hit.y-source.hit.y)<=height*9;
+      const sourceVisible=relativeEligible && anchoredVisible(j,source.hit);
+      if(j.activeClick)log(j,"nav-choice",{index:index+1,source:source?source.index+1:0,mounted:mounted!==null,anchored:!!hit.anchorKey,
+        savedDistance:source?Math.round(hit.y-source.hit.y):0,relativeEligible,sourceVisible:!!sourceVisible,
+        reason:mounted!==null?"target-mounted":!hit.anchorKey?"no-anchor":!source?"no-source":source.index===index?"same-source":!relativeEligible?"source-too-far":!sourceVisible?"source-not-visible":"relative"});
+      if(relativeEligible && sourceVisible){
         outcome=await relativeTo(j,hit,index,s,source);
         if(outcome==="verified")method="relative";
+        else if(j.activeClick)log(j,"nav-fallback",{from:"relative",to:"direct",reason:"target-not-verified"});
       }
       if(outcome==="not-found" && s.alive()){
       mounted=locateMounted(j,hit);
       target=Math.max(0,(mounted??hit.y)-viewport(root).height*0.35);
-      move(root,target);s.steps++;
+      s.move(target,"direct");
       const settleState=await s.settle(Math.max(500,waits[j.pace])+160,hit);
       const settled=settleState!=="interrupted";
       if(settled && s.alive())outcome=inspectPosition(j,hit);
       // A busy viewport is not a failure if the exact target is still there.
       if(outcome!=="verified" && s.alive() && await confirmVisible(j,hit,s))outcome="verified";
       log(j,"jump-direct",{index:index+1,savedY:hit.y,target:Math.round(target),actual:Math.round(top(root)),range:Math.round(max(root)),settled,settleState,outcome});
+      if(j.activeClick)log(j,"nav-direct-state",{index:index+1,...targetState(j,hit)});
       if(outcome==="not-found" && s.alive() && hit.anchorKey){
+        if(j.activeClick)log(j,"nav-fallback",{from:"direct",to:"local",reason:"target-not-verified"});
         outcome=await localTo(j,hit,index,s);
         if(outcome==="verified")method="local";
       }
       }
     }
     if(outcome==="not-found" && s.alive()){
+      if(j.activeClick)log(j,"nav-fallback",{from:hit.anchorKey?"local":"direct",to:"replay",reason:"target-not-verified"});
       method="replay";
       outcome=await replayTo(j,hit,index,s);
     }
@@ -692,17 +747,47 @@
     if(!Number.isInteger(index)||!hit)throw new Error("Result is no longer available.");
     if(!j.root.isConnected)throw new Error("Scroll container disappeared.");
     j.navBusy=true;
-    let cancelled=false, session;
+    const click=j.clickSeq=(j.clickSeq||0)+1, began=performance.now(), previous=j.lastJump;
+    j.activeClick=click;
+    let cancelled=false, session, result;
     const events=["wheel","touchstart","pointerdown","keydown"];
-    const interrupt=e=>{if(e.isTrusted && (e.type!=="keydown" || ["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "].includes(e.key)))cancelled=true;};
+    const interrupt=e=>{if(e.isTrusted && (e.type!=="keydown" || ["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "].includes(e.key))){
+      if(!cancelled)log(j,"nav-interrupt",{type:e.type});
+      cancelled=true;
+    }};
     for(const type of events)window.addEventListener(type,interrupt,{capture:true,passive:true});
     try {
+      if(click===1)environment(j);
+      log(j,"nav-click-start",{index:index+1,previous:previous?.index||0,lastVerified:j.lastVerified?j.lastVerified.index+1:0,savedY:hit.y,anchorType:hit.anchor?.attr||"none",sibling:!!hit.anchor?.up,pace:j.pace,...targetState(j,hit)});
       session=navigationSession(j,()=>cancelled);
-      return await navigate(j,hit,index,session);
+      result=await navigate(j,hit,index,session);
+      return result;
+    }catch(error){
+      log(j,"nav-error",{reason:"navigation-exception"});
+      throw error;
     }finally{
       session?.close();
       for(const type of events)window.removeEventListener(type,interrupt,true);
-      j.navBusy=false;
+      const elapsedMs=Math.round(performance.now()-began);
+      j.lastJump={index:index+1,method:result?.method||"none",outcome:result?.outcome||"error",elapsedMs,click};
+      try{
+        log(j,"nav-click-end",{...j.lastJump,steps:session?.steps||0,cancelled,...targetState(j,hit)});
+      }catch{log(j,"nav-click-end",{...j.lastJump,steps:session?.steps||0,cancelled,stateUnavailable:true});}
+      j.activeClick=0;j.navBusy=false;
+      // Observe late reflow without delaying the click or scrolling the page.
+      // Stop observing if a new operation or user input supersedes the click.
+      if(result && !cancelled && j.root.isConnected){
+        const finished=performance.now();
+        let intervened=false;
+        const afterInput=e=>{if(e.isTrusted)intervened=true;};
+        for(const type of events)window.addEventListener(type,afterInput,{capture:true,passive:true});
+        for(const delay of [150,500,1200])setTimeout(()=>{
+          if(job===j && j.clickSeq===click && !j.navBusy && !j.verification?.running && !intervened && j.root.isConnected){
+            try{log(j,"nav-post",{click,index:index+1,afterMs:Math.round(performance.now()-finished),...targetState(j,hit)});}catch{log(j,"nav-post",{click,index:index+1,stateUnavailable:true});}
+          }
+          if(delay===1200)for(const type of events)window.removeEventListener(type,afterInput,true);
+        },delay);
+      }
     }
   }
   function verifyAll() {
@@ -745,7 +830,7 @@
     start, snapshot, diagnostics,
     stop:()=>{if(job?.status==="running"){log(job,"stop-request");job.cancel=true;} if(job?.verification?.running)job.verification.cancel=true; return snapshot();},
     jump, verifyAll,
-    restore:()=>{if(job && job.status!=="running" && !job.navBusy && !job.verification?.running && job.root.isConnected) moveRaw(job.root,job.original); return snapshot();},
+    restore:()=>{if(job && job.status!=="running" && !job.navBusy && !job.verification?.running && job.root.isConnected) {job.clickSeq=(job.clickSeq||0)+1;moveRaw(job.root,job.original);log(job,"manual-restore",{actual:Math.round(top(job.root)),range:Math.round(max(job.root))});} return snapshot();},
     clear:()=>{if(job?.status==="running"||job?.navBusy||job?.verification?.running) throw new Error("Stop the current operation first."); job=null; return snapshot();}
   };
 })(globalThis.__vpfCore);
