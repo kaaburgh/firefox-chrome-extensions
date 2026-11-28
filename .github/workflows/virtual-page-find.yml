@@ -41,3 +41,45 @@ jobs:
           npx playwright install --with-deps chromium firefox
       - name: DOM integration tests
         run: node tests/browser-smoke.mjs all
+
+  shared-chat:
+    # Do not run against external PR code or expose the share URL in public logs.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        timezone: [Europe/Berlin, UTC]
+    defaults:
+      run:
+        working-directory: virtual-page-find
+    steps:
+      - name: Check optional shared-page configuration
+        id: config
+        working-directory: .
+        env:
+          VPF_SHARED_URL: ${{ secrets.VPF_SHARED_URL }}
+        run: |
+          if [ -n "$VPF_SHARED_URL" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Shared-page smoke test disabled (VPF_SHARED_URL not configured)."
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: steps.config.outputs.enabled == 'true'
+        with:
+          persist-credentials: false
+      - name: Install Firefox test dependency
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          npx playwright install --with-deps firefox
+      - name: Shared chat navigation smoke test
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          VPF_SHARED_URL: ${{ secrets.VPF_SHARED_URL }}
+          VPF_EXPECTED_COUNT: ${{ vars.VPF_EXPECTED_COUNT }}
+          VPF_TIMEZONE: ${{ matrix.timezone }}
+        run: node tests/shared-chat-smoke.mjs

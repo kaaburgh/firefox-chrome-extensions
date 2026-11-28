@@ -5,13 +5,17 @@
 <label for="container">Scroll container</label><select id="container"></select>
 <label class="check"><input type="checkbox" id="case"> Match case</label>
 <label for="pace">Scan speed (minimum wait per view)</label><select id="pace"><option value="normal" selected>Normal (550 ms)</option><option value="fast">Fast (250 ms)</option><option value="slow">Slow (1000 ms)</option></select>
+<label class="check"><input type="checkbox" id="rescan" checked> Recheck after layout changes</label>
 <div class="actions"><button id="start" disabled>Scan</button><button type="button" id="stop" disabled>Stop</button></div></form>
 <p class="hint">Scans from top to bottom. Closing this popup does not stop a scan. Interacting with the page stops it. Results are best effort.</p>
 <p id="status" role="status" aria-live="polite">Opening…</p><progress id="progress" hidden></progress>
 <p id="layout" hidden></p><p id="notes" hidden></p><p id="message" role="status"></p>
 <div class="actions"><button id="copy" disabled>Copy matches</button><button id="restore" disabled>Restore position</button><button id="clear" disabled>Clear</button></div>
+<div class="actions"><button id="verify" disabled>Verify all positions</button></div>
+<p id="verification" role="status" hidden></p>
 <div id="results" aria-label="Matches"></div>
 <details id="diagnostics" hidden><summary>Diagnostic log (local)</summary>
-<p class="hint">Timing, geometry and counts only. No page text, query or URL. Cleared on a new scan, Clear or reload.</p>
+<p id="last-jump" class="hint" hidden></p>
+<p class="hint">Every result click is logged automatically, including strategy, geometry, DOM identity checks and late reflow. No page text, query, URL or DOM ID values. Kept when the popup closes; cleared on a new scan, Clear or page reload.</p>
 <textarea id="log" readonly aria-label="Diagnostic log" rows="7" wrap="off" spellcheck="false"></textarea>
 <button type="button" id="copy-log" disabled>Copy diagnostic log</button></details><script src="popup.js"></script></body></html>

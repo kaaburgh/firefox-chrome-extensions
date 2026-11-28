@@ -40,7 +40,7 @@ async function test(name, browserType) {
       return s;
     }
     const s = await scan(false,7);
-    const jump = await page.evaluate(hit=>window.__virtualPageFindV1.jump({hit}),s.hits[3]);
+    const jump = await page.evaluate(()=>window.__virtualPageFindV1.jump({index:3}));
     assert.equal(jump.found,true);
     await page.evaluate(()=>window.__virtualPageFindV1.restore());
     await scan(true,6);
@@ -54,6 +54,17 @@ async function test(name, browserType) {
     assert.equal(await page.locator("#list").evaluate(el=>el.scrollTop),initial);
     console.log(name+": passed container discovery, seven/six matches, inline split, repeated labels, jump, restoration, cancellation");
     await reviewRegressions(page, name);
+    await navigationRegressions(page,name);
+    await replayNavigationRegression(page,name);
+    await siblingAnchorRegression(page,name);
+    await offscreenMutationRegression(page,name);
+    await busyNavigationRegression(page,name);
+    await localRecoveryRegression(page,name);
+    await relativeRecoveryRegression(page,name);
+    await clippedNavigationRegression(page,name);
+    await clickDiagnosticsRegression(page,name);
+    await turnKeyRegression(page,name);
+    await identityReviewRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -66,7 +77,7 @@ async function reviewRegressions(page,name) {
   }
   async function scan(id, pace="normal", expectedStatus="traversed") {
     const before=await page.locator("#review-list").evaluate(el=>el.scrollTop);
-    await page.evaluate(({id,pace})=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace}),{id,pace});
+    await page.evaluate(({id,pace})=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace,rescan:false}),{id,pace});
     await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
     const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
     assert.equal(s.status,expectedStatus,s.notes.join("; "));
@@ -85,20 +96,58 @@ async function reviewRegressions(page,name) {
   assert.equal(s.hits.length,1,JSON.stringify(s.hits));
   assert.equal(Math.floor(s.hits[0].y/40),20);
   assert.equal(s.pace,"normal");
+  assert.equal(s.hits[0].anchorKey,undefined,"shared spacer ID must not identify virtual rows");
+  const delayedJump=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(delayedJump.found,false);
+  assert.equal(delayedJump.outcome,"approximate");
 
-  const sticky=await setup('<div id="review-list"><div style="position:sticky;top:0;background:white">Yesterday Yesterday</div><div style="height:900px"></div><div>Yesterday</div></div>');
+  // Identical unkeyed rows recycle the same child-node slots under one ID.
+  // Reject the common ancestor as identity in both directions: neither
+  // duplicate one logical row nor merge distinct rows that reuse a slot.
+  const unkeyed=await setup(`<div id="review-list"><div id="shared-list" style="height:1200px;position:relative"></div></div>
+    <script>(()=>{const el=document.querySelector("#review-list"),space=document.querySelector("#shared-list");let timer;
+    function draw(){const first=Math.max(0,Math.floor(el.scrollTop/40)-1),items=[];
+      for(let i=first;i<Math.min(30,first+8);i++){const row=document.createElement("div");
+        row.style.cssText="position:absolute;top:"+i*40+"px;height:40px;left:0;right:0";
+        row.dataset.vpfTestId="oracle-"+i;row.textContent=[4,12,20].includes(i)?"Yesterday":"Row "+i;items.push(row);}
+      space.replaceChildren(...items);}
+    el.addEventListener("scroll",()=>{clearTimeout(timer);timer=setTimeout(draw,70);});draw();})();</script>`);
+  s=await scan(unkeyed,"fast");
+  assert.equal(s.hits.length,3,JSON.stringify(s.hits));
+  assert.deepEqual(s.hits.map(h=>Math.floor(h.y/40)),[4,12,20]);
+  assert.ok(s.hits.every(h=>!h.anchorKey));
+  for(let index=0;index<3;index++){
+    const result=await page.evaluate(index=>window.__virtualPageFindV1.jump({index}),index);
+    assert.equal(result.outcome,"approximate");
+    assert.equal(result.found,false);
+  }
+  console.log(name+": passed unkeyed virtual rows with shared ancestor ID, no false duplicates/merges or verified identities");
+
+  // Rendering may remain busy for more than the previous 1.5s cap.
+  // The match is inserted at the end of a bounded asynchronous update.
+  const slowRender=await setup(`<div id="review-list"><div style="height:180px"></div><div id="slow-row" style="height:40px"></div><div style="height:450px"></div></div>
+    <script>(()=>{const el=document.querySelector("#review-list"),row=document.querySelector("#slow-row");let started=false;
+      el.addEventListener("scroll",()=>{if(!started && el.scrollTop>0){started=true;let n=0;
+        const timer=setInterval(()=>{row.textContent="Rendering "+(++n);if(n===20){clearInterval(timer);row.textContent="Yesterday";}},100);
+      }});})();</script>`);
+  s=await scan(slowRender,"fast");
+  assert.equal(s.hits.length,1,JSON.stringify(s.hits));
+  assert.equal(s.notes.length,0);
+  console.log(name+": passed delayed settling beyond old timeout without suppressing warnings");
+
+  const sticky=await setup('<div id="review-list"><div id="sticky-label" style="position:sticky;top:0;background:white">Yesterday Yesterday</div><div style="height:900px"></div><div>Yesterday</div></div>');
   s=await scan(sticky,"fast");
   assert.equal(s.hits.length,3,JSON.stringify(s.hits));
   assert.equal(s.hits.filter(h=>h.pinnedKey).length,2);
-  assert.equal((await page.evaluate(hit=>window.__virtualPageFindV1.jump({hit}),s.hits[0])).found,true);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}))).found,true);
 
-  const reverse=await setup('<div id="review-list" style="display:flex;flex-direction:column-reverse"><div style="flex:none;height:900px">Yesterday newest</div><div style="flex:none;height:50px">Yesterday oldest</div></div>');
+  const reverse=await setup('<div id="review-list" style="display:flex;flex-direction:column-reverse"><div id="newest" style="flex:none;height:900px">Yesterday newest</div><div id="oldest" style="flex:none;height:50px">Yesterday oldest</div></div>');
   await page.locator("#review-list").evaluate(el=>{el.scrollTop=-100;});
   s=await scan(reverse,"fast");
   assert.equal(s.hits.length,2,JSON.stringify(s.hits));
   assert.ok(s.hits[0].context.includes("oldest"));
   assert.ok(s.hits[1].context.includes("newest"));
-  assert.equal((await page.evaluate(hit=>window.__virtualPageFindV1.jump({hit}),s.hits[0])).found,true);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}))).found,true);
   await page.evaluate(()=>window.__virtualPageFindV1.restore());
   assert.equal(await page.locator("#review-list").evaluate(el=>el.scrollTop),-100);
 
@@ -139,12 +188,403 @@ async function reviewRegressions(page,name) {
   const jumping=await setup(`<div id="review-list"><div style="height:1200px"></div></div>
     <script>(()=>{const el=document.querySelector("#review-list");let jumped=false;
       el.addEventListener("scroll",()=>{if(!jumped && el.scrollTop>0){jumped=true;el.scrollTop=900;}});})();</script>`);
-  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),jumping);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast",rescan:false}),jumping);
   await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
   s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
   assert.equal(s.status,"partial");
   assert.ok(s.notes.some(n=>n.includes("A scroll jump exceeded one viewport")));
-  console.log(name+": passed append/prepend layout uncertainty, private diagnostics, and real gap warning");
+  const recover=await setup(`<div id="review-list"><div style="height:350px"></div><div>Yesterday missed on first pass</div><div style="height:850px"></div></div>
+    <script>(()=>{const el=document.querySelector("#review-list");let jumped=false;
+      el.addEventListener("scroll",()=>{if(!jumped && el.scrollTop>0){jumped=true;el.scrollTop=900;}});})();</script>`);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),recover);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
+  s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.status,"traversed",s.notes.join("; "));
+  assert.equal(s.pass,2);assert.equal(s.hits.length,1);
+  assert.ok((await page.evaluate(()=>window.__virtualPageFindV1.diagnostics())).includes("firstWarnings=1"));
+  console.log(name+": passed append/prepend uncertainty, private diagnostics, real gap warning and recovery from a transient gap");
+}
+
+async function navigationRegressions(page,name) {
+  const html=await readFile(new URL("tests/navigation-fixture.html",base),"utf8");
+  await page.setContent(html);
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#nav-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.status,"traversed",s.notes.join("; "));
+  assert.equal(s.pass,2);assert.ok(s.layoutChanges>0);assert.equal(s.finalLayoutChanges,0);
+  assert.equal(s.hits.length,4);
+  const oracle=[2,12,23,34];
+  for(let i=0;i<oracle.length;i++){
+    const result=await page.evaluate(index=>window.__virtualPageFindV1.jump({index}),i);
+    assert.equal(result.outcome,"verified");
+    // The oracle attribute is never read by the scanner. Verify the actual
+    // logical row is present within the viewport, not just an equal string.
+    const visible=await page.evaluate(expected=>{
+      const el=document.querySelector("#nav-list"),r=el.getBoundingClientRect();
+      const row=document.querySelector('[data-vpf-test-id="oracle-'+expected+'"]');
+      if(!row)return false;
+      // The contract is visibility of the matching text, not the entire
+      // 64px card. The independent oracle row is still mandatory.
+      const range=document.createRange();range.selectNodeContents(row);
+      const boxes=Array.from(range.getClientRects()).filter(b=>b.width>0&&b.height>0);
+      return boxes.length>0&&boxes.every(b=>b.top>=r.top+el.clientTop-0.5&&b.bottom<=r.top+el.clientTop+el.clientHeight+0.5&&b.left>=r.left+el.clientLeft-0.5&&b.right<=r.left+el.clientLeft+el.clientWidth+0.5);
+    },oracle[i]);
+    assert.equal(visible,true,"wrong logical row: "+oracle[i]);
+  }
+  const initial=await page.locator("#nav-list").evaluate(el=>el.scrollTop);
+  await page.evaluate(()=>window.__virtualPageFindV1.verifyAll());
+  await page.waitForFunction(()=>!window.__virtualPageFindV1.snapshot().verification.running,null,{timeout:30000});
+  const v=await page.evaluate(()=>window.__virtualPageFindV1.snapshot().verification);
+  assert.equal(v.verified,4);assert.equal(v.checked,4);assert.deepEqual(v.results,["verified","verified","verified","verified"]);
+  assert.equal(await page.locator("#nav-list").evaluate(el=>el.scrollTop),initial);
+  const diagnostics=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.ok(diagnostics.includes("anchoredHits=4"));
+  assert.ok(!["logical-","oracle-","Yesterday"].some(s=>diagnostics.includes(s)));
+  await page.evaluate(()=>window.__virtualPageFindV1.verifyAll());
+  await page.evaluate(()=>window.__virtualPageFindV1.stop());
+  await page.waitForFunction(()=>!window.__virtualPageFindV1.snapshot().verification.running);
+  const stopped=await page.evaluate(()=>window.__virtualPageFindV1.snapshot().verification);
+  assert.equal(stopped.cancel,true);assert.ok(stopped.checked<4);
+  assert.equal(await page.locator("#nav-list").evaluate(el=>el.scrollTop),initial);
+  // Identical text at the old position is not proof of identity.
+  await page.setContent('<div id="static-list" style="height:200px;width:400px;overflow:auto"><div id="original">Yesterday</div><div style="height:500px"></div></div>');
+  const staticId=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#static-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),staticId);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  await page.evaluate(()=>{document.querySelector("#original").id="replacement";});
+  const ambiguous=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(ambiguous.found,false);assert.equal(ambiguous.outcome,"not-found");
+  console.log(name+": passed two-pass reflow, four independent oracle positions, batch verification and rejection of a wrong identity");
+}
+
+async function replayNavigationRegression(page,name) {
+  // Model a virtualizer that accepts successive viewport steps but moves the
+  // scroll offset elsewhere when a large jump crosses unmounted content.
+  await page.setContent(`<!doctype html><style>#replay-list{height:240px;width:500px;overflow:auto;overflow-anchor:none}#replay-space{height:1600px;position:relative}.row{position:absolute;left:0;right:0;height:40px}</style>
+    <div id="replay-list"><div id="replay-space"></div></div><script>(()=>{
+      const el=document.querySelector("#replay-list"),space=document.querySelector("#replay-space");
+      let previous=0,timer;
+      function draw(){const first=Math.max(0,Math.floor(el.scrollTop/40)-2),items=[];
+        for(let i=first;i<Math.min(40,first+10);i++){const row=document.createElement("div");
+          row.className="row";row.style.top=i*40+"px";row.dataset.vpfTestId="oracle-"+i;
+          row.textContent=[8,20,32].includes(i)?"Yesterday":"Row "+i;items.push(row);}
+        space.replaceChildren(...items);}
+      el.addEventListener("scroll",()=>{clearTimeout(timer);
+        if(el.scrollTop!==0 && Math.abs(el.scrollTop-previous)>el.clientHeight){el.scrollTop=0;}
+        previous=el.scrollTop;timer=setTimeout(draw,70);});draw();
+    })();</script>`);
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#replay-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.status,"traversed");assert.equal(s.hits.length,3);assert.ok(s.hits.every(h=>!h.anchorKey));
+  // The jump really lands on row 32, not simply any identical match.
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:2}));
+  assert.equal(result.outcome,"approximate");assert.equal(result.found,false);
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#replay-list"),row=el.querySelector('[data-vpf-test-id="oracle-32"]');
+    if(!row)return false;const a=el.getBoundingClientRect(),b=row.getBoundingClientRect();
+    return b.bottom>a.top && b.top<a.bottom;
+  }),true);
+  let diagnostic=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.match(diagnostic,/jump-direct index=3 [^\n]*outcome=not-found/);
+  assert.match(diagnostic,/jump index=3 [^\n]*method=replay outcome=approximate/);
+  await page.evaluate(()=>window.__virtualPageFindV1.restore());
+  await page.waitForTimeout(300);
+  await page.evaluate(()=>window.__virtualPageFindV1.verifyAll());
+  await page.waitForFunction(()=>!window.__virtualPageFindV1.snapshot().verification.running,null,{timeout:90000});
+  const v=await page.evaluate(()=>window.__virtualPageFindV1.snapshot().verification);
+  assert.equal(v.checked,3);assert.equal(v.verified,0);assert.equal(v.approximate,3);
+  diagnostic=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  const batch=diagnostic.slice(diagnostic.lastIndexOf("verify-start"));
+  assert.equal((batch.match(/jump-replay-start/g)||[]).length,1,"batch must reuse forward replay");
+  assert.equal(await page.locator("#replay-list").evaluate(el=>el.scrollTop),0);
+  console.log(name+": passed rejected direct jump, incremental replay to independent oracle row, and shared batch replay without false verification");
+}
+
+async function siblingAnchorRegression(page,name) {
+  await page.setContent(`<!doctype html><style>#siblings{height:220px;width:500px;overflow:auto;overflow-anchor:none}.turn{height:280px}.stamp{display:block}</style>
+    <div id="siblings">
+      <div class="turn"><div class="stamp"><span style="display:block"><span>Yesterday</span></span></div><div><div><article data-turn-id="turn-a">A</article></div></div></div>
+      <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="turn-b">B</article></div>
+      <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="turn-c">C</article></div>
+      <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="ambiguous-a">D</article><article data-turn-id="ambiguous-b">E</article></div>
+    </div>`);
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#siblings").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.hits.length,4);
+  assert.deepEqual(s.hits.map(h=>h.anchor?.value),["turn-a","turn-b","turn-c",undefined]);
+  assert.deepEqual(s.hits.slice(0,3).map(h=>h.anchor.up),[3,1,1]);
+  // Move two matching labels and verify their corresponding turn identity.
+  await page.evaluate(()=>{document.querySelector(".turn").style.height="650px";});
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
+  assert.equal(result.found,true);
+  assert.equal(await page.evaluate(()=>{
+    const stamp=document.querySelector('[data-turn-id="turn-b"]').previousElementSibling;
+    const a=document.querySelector("#siblings").getBoundingClientRect(),b=stamp.getBoundingClientRect();
+    return b.top>=a.top&&b.bottom<=a.bottom;
+  }),true);
+  await page.evaluate(()=>{document.querySelector('[data-turn-id="turn-b"]').dataset.turnId="replacement";});
+  const wrong=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
+  assert.equal(wrong.found,false);
+  console.log(name+": passed unique sibling turn anchors, changed geometry and rejection of ambiguous or replaced turn identity");
+}
+
+async function offscreenMutationRegression(page,name) {
+  await page.setContent(`<!doctype html><style>#animated{height:200px;width:400px;overflow:auto}#outside{height:40px}</style>
+    <div id="animated"><div>Yesterday first</div><div style="height:650px"></div><div id="outside">tick</div><div style="height:650px"></div><div>Yesterday last</div></div>
+    <script>(()=>{const el=document.querySelector("#animated"),node=document.querySelector("#outside");let timer,n=0;
+      el.addEventListener("scroll",()=>{if(!timer&&el.scrollTop>0&&el.scrollTop<350){timer=setInterval(()=>node.textContent="tick "+(++n),50);}
+      if(el.scrollTop>350&&timer){clearInterval(timer);timer=0;}});})();</script>`);
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#animated").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.status,"traversed",s.notes.join("; "));
+  assert.equal(s.hits.length,2);
+  assert.match(await page.evaluate(()=>window.__virtualPageFindV1.diagnostics()),/ignoredMutations=[1-9]\d*/);
+  console.log(name+": passed offscreen text mutation settling without suppressing visible updates");
+}
+
+async function busyNavigationRegression(page,name) {
+  await page.setContent('<!doctype html><style>#busy-list{height:240px;width:500px;overflow:auto;overflow-anchor:none}.row{height:320px}</style><div id="busy-list"><div class="row" id="a">Yesterday</div><div class="row" id="b">Yesterday</div><div class="row" id="c">Yesterday</div><div class="row" id="d">Yesterday</div><div style="height:300px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#busy-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.hits.length,4);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:3}))).found,true);
+  // Every scroll during navigation produces continued visible mutations and
+  // small geometry jitter, but leaves the exact matching label mounted.
+  await page.evaluate(()=>{
+    const el=document.querySelector("#busy-list"),node=document.createElement("div");
+    node.style.cssText="position:sticky;bottom:0;height:16px";el.append(node);
+    let timer,n=0;
+    el.addEventListener("scroll",()=>{if(timer)return;timer=setInterval(()=>{
+      node.textContent="tick "+(++n);
+      el.scrollTop+=n%2?1:-1;
+    },50);});
+    globalThis.__stopBusy=()=>clearInterval(timer);
+  });
+  const before=Date.now(),back=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
+  assert.equal(back.outcome,"verified");
+  assert.equal(back.method,"direct");
+  assert.ok(Date.now()-before<3000,"exact visible target must not wait for whole-page quiet");
+  await page.evaluate(()=>globalThis.__stopBusy());
+  const pos=await page.locator("#busy-list").evaluate(el=>el.scrollTop);
+  const repeated=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
+  assert.equal(repeated.method,"visible");
+  assert.equal(await page.locator("#busy-list").evaluate(el=>el.scrollTop),pos);
+  console.log(name+": passed exact backward navigation despite busy viewport, repeated visible click without scroll");
+}
+
+async function localRecoveryRegression(page,name) {
+  await page.setContent('<!doctype html><style>#local-list{height:240px;width:500px;overflow:auto;overflow-anchor:none}#before{height:1200px}.row{height:40px}</style><div id="local-list"><div id="before"></div><div id="target" class="row">Yesterday</div><div style="height:1200px"></div><div id="other" class="row">Yesterday</div><div style="height:400px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#local-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.hits.length,2);
+  // Unmount the target until a nearby backward scroll re-renders it.
+  // Its saved position is reachable, but the exact target is just above it.
+  await page.evaluate(()=>{
+    const el=document.querySelector("#local-list"),row=document.querySelector("#target");
+    const before=document.querySelector("#before");
+    row.remove();before.style.height="1040px";
+    let last=el.scrollTop;
+    el.addEventListener("scroll",()=>{
+      if(el.scrollTop<last && el.scrollTop>700 && el.scrollTop<1200 && !row.isConnected)before.after(row);
+      last=el.scrollTop;
+    });
+  });
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(result.outcome,"verified");
+  assert.equal(result.method,"local");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#local-list"),row=document.querySelector("#target");
+    const a=el.getBoundingClientRect(),b=row.getBoundingClientRect();
+    return b.bottom>a.top&&b.top<a.bottom;
+  }),true);
+  assert.match(await page.evaluate(()=>window.__virtualPageFindV1.diagnostics()),/jump-local index=1 [^\n]*outcome=verified/);
+  console.log(name+": passed nearby reverse recovery when direct landing coordinate was correct but target was not mounted");
+}
+
+async function relativeRecoveryRegression(page,name) {
+  await page.setContent('<!doctype html><style>#relative-list{height:240px;width:500px;overflow:auto;overflow-anchor:none;position:relative}#before-relative{height:1200px}.row{height:40px}</style><div id="relative-list"><div id="before-relative"></div><div id="older" class="row">Yesterday</div><div style="height:800px"></div><div id="newer" class="row">Yesterday</div><div style="height:400px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#relative-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.hits.length,2);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}))).outcome,"verified");
+  // The virtualizer shrinks the estimated prefix so the current newer
+  // result now lies BEFORE the older result's saved numeric coordinate.
+  // Recreate the older row only as the user moves backwards.
+  await page.evaluate(()=>{
+    const el=document.querySelector("#relative-list"),row=document.querySelector("#older"),prefix=document.querySelector("#before-relative");
+    row.remove();prefix.style.height="300px";
+    el.scrollTop=document.querySelector("#newer").offsetTop-70;
+    let previous=el.scrollTop;
+    el.addEventListener("scroll",()=>{
+      const now=el.scrollTop;
+      if(now<previous && now<520 && !row.isConnected)prefix.after(row);
+      previous=now;
+    });
+  });
+  const initial=await page.locator("#relative-list").evaluate(el=>el.scrollTop);
+  assert.ok(initial<s.hits[0].y);
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(result.outcome,"verified");
+  assert.equal(result.method,"relative");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#relative-list"),row=document.querySelector("#older");
+    if(!row)return false;
+    const a=el.getBoundingClientRect(),b=row.getBoundingClientRect();
+    return b.bottom>a.top&&b.top<a.bottom;
+  }),true);
+  const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.match(log,/jump-relative-start index=1 source=2 [^\n]*direction=-1/);
+  assert.doesNotMatch(log,/jump-replay-start index=1 /);
+  console.log(name+": passed backwards record-relative navigation despite inverted stale coordinate direction");
+}
+
+async function clippedNavigationRegression(page,name) {
+  await page.setContent('<!doctype html><style>#edge{height:200px;width:500px;overflow:auto;overflow-anchor:none}#edge-target{font:24px/30px sans-serif;height:80px}</style><div id="edge"><div style="height:400px"></div><div id="edge-target">Yesterday</div><div style="height:600px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#edge").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.snapshot())).hits.length,1);
+  await page.evaluate(()=>{
+    const el=document.querySelector("#edge"),row=document.querySelector("#edge-target");
+    const range=document.createRange();range.selectNodeContents(row);
+    const y=range.getBoundingClientRect().top-el.getBoundingClientRect().top;
+    el.scrollTop=y+8; // clip part of the match itself, not just the row.
+  });
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(result.outcome,"verified");
+  assert.notEqual(result.method,"visible","partly clipped text must not take no-scroll fast path");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#edge"),r=el.getBoundingClientRect(),range=document.createRange();
+    range.selectNodeContents(document.querySelector("#edge-target"));
+    const b=range.getBoundingClientRect();return b.top>=r.top&&b.bottom<=r.bottom;
+  }),true);
+  console.log(name+": passed fully visible matching text requirement");
+}
+
+async function clickDiagnosticsRegression(page,name) {
+  await page.setContent('<!doctype html><div id="private-scroll-container" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div style="height:300px"></div><div id="private-first">Yesterday private first</div><div style="height:800px"></div><div id="private-second">Yesterday private second</div><div style="height:400px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#private-scroll-container").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}))).outcome,"verified");
+  // The new click starts a separate trace, then a delayed reflow moves
+  // the verified target out of view after the jump has returned.
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}))).outcome,"verified");
+  await page.evaluate(()=>{setTimeout(()=>{document.querySelector("#private-scroll-container").scrollTop=0;},250);});
+  await page.waitForTimeout(1400);
+  const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.ok(log.includes("Extension: 0.2.13"));
+  assert.match(log,/nav-environment [^\n]*browser=/);
+  assert.match(log,/nav-click-start index=2 [^\n]*click=1/);
+  assert.match(log,/nav-click-start index=1 previous=2 [^\n]*click=2/);
+  assert.match(log,/nav-choice [^\n]*reason=target-mounted/);
+  assert.match(log,/nav-move strategy=direct [^\n]*immediate=/);
+  assert.match(log,/nav-settle [^\n]*firstVisible=/);
+  assert.match(log,/nav-direct-state [^\n]*sameAnchor=/);
+  assert.match(log,/nav-click-end index=1 [^\n]*outcome=verified/);
+  assert.match(log,/nav-post click=2 index=1 [^\n]*observed=not-found/);
+  const state=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(state.lastJump.index,1);assert.equal(state.lastJump.click,2);assert.equal(state.lastJump.outcome,"verified");
+  assert.ok(!["Yesterday","private first","private second","private-first","private-second","private-scroll-container","http://","https://"].some(v=>log.includes(v)));
+  // A popup reads the same journal through the engine's public API.
+  assert.equal(await page.evaluate(()=>window.__virtualPageFindV1.diagnostics()),log);
+  console.log(name+": passed per-click diagnostics, correlated moves and settles, late reflow and privacy");
+}
+
+async function turnKeyRegression(page,name) {
+  // Reconstruct the observed signed-in transcript nesting, not the
+  // shared-chat sibling-turn structure.
+  await page.setContent('<!doctype html><style>#key-list{height:240px;width:500px;overflow:auto;overflow-anchor:none;position:relative}#key-space{height:2400px;position:relative}.row{position:absolute;height:400px;overflow:clip;width:100%}</style><div id="key-list"><div id="key-space"></div></div>');
+  await page.evaluate(()=>{
+    const root=document.querySelector("#key-list"),space=document.querySelector("#key-space");
+    const render=()=>{
+      const first=Math.max(0,Math.floor(root.scrollTop/400)-1);
+      space.replaceChildren();
+      for(let i=first;i<Math.min(6,first+4);i++){
+        const row=document.createElement("div");row.className="row";row.style.top=i*400+"px";
+        row.setAttribute("data-virtualized-turn","");
+        const outer=document.createElement("div");outer.setAttribute("data-turn-key","private-turn-"+i);
+        const inner=document.createElement("div");
+        // A missing or non-unique search key must fall back to the turn key.
+        if(i!==1)inner.setAttribute("data-content-search-turn-key",i===2||i===3?"shared-key":"private-search-"+i);
+        inner.innerHTML='<div role="group" data-markdown-copy=""><time><span>Yesterday</span></time></div>';
+        outer.append(inner);row.append(outer);space.append(row);
+      }
+    };
+    let timer;root.addEventListener("scroll",()=>{clearTimeout(timer);timer=setTimeout(render,70);});render();
+  });
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#key-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.hits.length,6);
+  assert.deepEqual(s.hits.map(h=>h.anchor?.attr),["data-content-search-turn-key","data-turn-key","data-turn-key","data-turn-key","data-content-search-turn-key","data-content-search-turn-key"]);
+  for(const index of [4,2,1,5,0]){
+    const result=await page.evaluate(index=>window.__virtualPageFindV1.jump({index}),index);
+    assert.equal(result.outcome,"verified","turn "+index);
+    assert.equal(await page.evaluate(index=>{
+      const row=document.querySelector('[data-turn-key="private-turn-'+index+'"]');
+      if(!row)return false;
+      const range=document.createRange();range.selectNodeContents(row.querySelector("span"));
+      const b=range.getBoundingClientRect(),a=document.querySelector("#key-list").getBoundingClientRect();
+      return b.top>=a.top&&b.bottom<=a.bottom;
+    },index),true);
+  }
+  const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.match(log,/anchorType=data-content-search-turn-key/);
+  assert.match(log,/anchorType=data-turn-key/);
+  assert.ok(!log.includes("private-turn-")&&!log.includes("private-search-")&&!log.includes("shared-key"));
+  console.log(name+": passed nested virtualized turn keys, remounting, missing and duplicate search keys, privacy");
+}
+
+async function identityReviewRegression(page,name) {
+  for(const mode of ["path","anchor"]){
+    await page.setContent('<div id="review-id" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div style="height:180px"></div><div class="row" '+(mode==="path"?'data-item-id="logical"':'')+'><span>Yesterday</span></div><div style="height:800px"></div></div>');
+    await page.evaluate(mode=>{
+      const el=document.querySelector("#review-id"),row=el.querySelector(".row");
+      el.addEventListener("scroll",()=>{
+        if(el.scrollTop<=0)return;
+        if(mode==="anchor")row.dataset.itemId="logical";
+        else if(!row.querySelector("i")){const n=document.createElement("i");n.style.display="none";row.prepend(n);}
+      });
+    },mode);
+    const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#review-id").id);
+    await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+    await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+    const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+    assert.equal(s.hits.length,1,mode);assert.equal(s.hits[0].anchor?.value,"logical");
+  }
+  await page.setContent('<div id="review-id" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div style="height:400px"></div><div data-item-id="a">Yesterday</div><div style="height:600px"></div><div data-item-id="b">Yesterday</div><div style="height:600px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#review-id").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.snapshot())).hits.length,2);
+  await page.evaluate(()=>{
+    const el=document.querySelector("#review-id"),a=el.querySelector('[data-item-id="a"]'),b=el.querySelector('[data-item-id="b"]');
+    const spacer=b.previousElementSibling;a.replaceWith(b);
+    el.addEventListener("scroll",()=>{if(el.scrollTop>700&&!a.isConnected)spacer.after(a);});
+  });
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(result.outcome,"verified");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#review-id"),a=el.querySelector('[data-item-id="a"]');
+    return !!a && a.getBoundingClientRect().top>=el.getBoundingClientRect().top && a.getBoundingClientRect().bottom<=el.getBoundingClientRect().bottom;
+  }),true);
+  console.log(name+": passed changing paths/anchor availability and recovery past conflicting identity");
 }
 
 async function popupSizing(page,name) {
@@ -193,18 +633,23 @@ async function popupDiagnostics(page,name) {
   // Exercise the actual popup script with a minimal mock of extension APIs.
   // This is not a native toolbar popup or a permission/clipboard integration test.
   await page.evaluate(()=>{
-    const s={status:"layout-uncertain",layoutChanges:1,notes:[],hits:[{context:"[Yesterday]",y:150,x:0}],steps:3,elapsed:300,query:"Yesterday",pace:"fast"};
-    const api={tabs:{query:async()=>[{id:1}]},scripting:{executeScript:async ({args})=>args?[{result:args[0]==="discover"?[{id:0,label:"Test",height:200,range:500}]:args[0]==="diagnostics"?"test diagnostic record":s}]:[]}};
+    const s={navBusy:true,status:"layout-uncertain",layoutChanges:1,notes:[],hits:[{context:"[Yesterday]",y:150,x:0}],steps:3,elapsed:300,query:"Yesterday",pace:"fast",lastJump:{index:1,method:"direct",outcome:"verified",elapsedMs:725}};
+    const api={tabs:{query:async()=>[{id:1}]},scripting:{executeScript:async ({args})=>args?[{result:args[0]==="discover"?(s.navBusy?null:[{id:0,label:"Test",height:200,range:500}]):args[0]==="diagnostics"?"test diagnostic record":structuredClone(s)}]:[]}};
+    globalThis.__finishJump=()=>{s.navBusy=false;};
     Object.defineProperty(globalThis,"browser",{value:api,configurable:true});
   });
   await page.addScriptTag({path:fileURLToPath(new URL("src/popup.js",base))});
-  await page.waitForFunction(()=>document.querySelector("#status").textContent.includes("results uncertain"));
+  await page.waitForFunction(()=>document.querySelector("#status").textContent.includes("Navigating"));
+  assert.equal(await page.locator("#start").isDisabled(),true);
+  await page.evaluate(()=>globalThis.__finishJump());
+  await page.waitForFunction(()=>document.querySelector("#status").textContent.includes("results uncertain")&&!document.querySelector("#start").disabled);
   const warning=await page.locator("#layout").textContent();
   assert.ok(warning.includes("missing or duplicated"));
   assert.ok(warning.includes("No user input is required"));
   await page.locator("#diagnostics summary").click();
   await page.waitForFunction(()=>document.querySelector("#log").value==="test diagnostic record");
   assert.equal(await page.locator("#copy-log").isEnabled(),true);
+  assert.match(await page.locator("#last-jump").textContent(),/Last click: #1 · direct · verified · 0.72 s|Last click: #1 · direct · verified · 0.73 s/);
   console.log(name+": passed popup layout-warning wording and diagnostic display");
 }
 

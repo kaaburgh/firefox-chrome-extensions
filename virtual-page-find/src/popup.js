@@ -15,34 +15,46 @@
   }
   function render(s) {
     last=s;
-    const running=s.status==="running", has=s.status!=="idle";
+    const verifying=!!s.verification?.running, navigating=!!s.navBusy, running=s.status==="running"||verifying||navigating, has=s.status!=="idle";
     $("start").disabled=running || !candidates.length || busy;
-    $("stop").disabled=!running || busy;
-    $("query").disabled=running; $("case").disabled=running; $("container").disabled=running; $("pace").disabled=running;
+    $("stop").disabled=!running || busy || navigating;
+    $("query").disabled=running; $("case").disabled=running; $("container").disabled=running; $("pace").disabled=running; $("rescan").disabled=running;
     $("copy").disabled=!s.hits.length || running; $("restore").disabled=!has || running;
     $("clear").disabled=!has || running;
+    $("verify").disabled=running || !s.hits.length;
+    const v=s.verification;
+    $("verification").hidden=!v;
+    $("verification").textContent=v ? (v.running?"Verifying… ":"Verification: ")+v.verified+"/"+v.total+" DOM identities verified; "+v.approximate+" approximate, "+v.notFound+" not found; "+v.checked+"/"+v.total+" checked."+(v.limit<v.total?" First 100 only.":"")+(v.cancel?" Stopped.":"") : "";
     const labels={idle:"Ready",running:s.phase,traversed:"Reached both ends (best effort)","layout-uncertain":"Reached both ends — results uncertain (layout changed)",partial:"Incomplete / uncertain"};
-    const statusLabel=labels[s.status];
+    const statusLabel=navigating?"Navigating to result":verifying?"Verifying positions":labels[s.status];
     $("status").textContent=statusLabel+(has?" · "+s.hits.length+" matches · "+s.steps+" views · "+Math.round(s.elapsed/1000)+" s":"");
-    $("progress").hidden=!running;
-    $("progress").max=Math.max(1,s.range||0);
-    $("progress").value=Math.max(0,s.position||0);
+    $("progress").hidden=!running || navigating;
+    $("progress").max=verifying?Math.max(1,v.limit):Math.max(1,s.range||0);
+    $("progress").value=verifying?v.checked:Math.max(0,s.position||0);
     $("notes").textContent=s.notes.join(" ");
     $("notes").hidden=!s.notes.length;
     $("layout").hidden=!s.layoutChanges;
     $("layout").textContent=s.layoutChanges ?
-      "Warning: the page resized its scroll area "+s.layoutChanges+" time(s), possibly while loading or rendering content. No user input is required. Matches may be missing or duplicated, and jump positions may be inaccurate." : "";
+      s.status==="traversed" && s.pass===2 && !s.finalLayoutChanges ?
+        "The first pass encountered layout changes; the second pass reached both ends without further detected range changes. Positions are still best effort." :
+        "Warning: the page resized its scroll area "+s.layoutChanges+" time(s), possibly while loading or rendering content. No user input is required. Matches may be missing or duplicated, and jump positions may be inaccurate." : "";
     $("diagnostics").hidden=!has;
-    if (!has) { $("log").value=""; $("copy-log").disabled=true; }
-    const key=JSON.stringify([running,s.hits]);
+    $("copy-log").disabled=!has;
+    const jump=s.lastJump;
+    $("last-jump").hidden=!jump;
+    $("last-jump").textContent=jump?"Last click: #"+jump.index+" · "+jump.method+" · "+jump.outcome+" · "+(jump.elapsedMs/1000).toFixed(2)+" s":"";
+    if (!has) { $("log").value=""; }
+    const key=JSON.stringify([running,s.hits,v?.results]);
     if (key!==revision) {
       revision=key;
       const fragment=document.createDocumentFragment();
       for (const [i,h] of s.hits.entries()) {
         const button=document.createElement("button");
         button.type="button"; button.className="result"; button.disabled=running;
-        button.textContent=(i+1)+". "+h.context+" ("+h.y+" px)";
-        button.addEventListener("click",async()=>{try { const r=await call("jump",{hit:h}); message(r.found?"Match visible.":"Approximate position only: match could not be verified."); } catch(e){message(e.message);} });
+        const checked=v?.results?.[i];
+        const checkLabel=checked==="verified"?" · Verified":checked==="approximate"?" · Approximate":checked==="not-found"?" · Not found":"";
+        button.textContent=(i+1)+". "+h.context+" ("+h.y+" px)"+checkLabel;
+        button.addEventListener("click",()=>void perform(async()=>{message("Navigating to result #"+(i+1)+"…");const r=await call("jump",{index:i});render(await call("snapshot"));if($("diagnostics").open)await refreshLog();message(r.found?"DOM identity verified.":r.outcome==="approximate"?"Approximate position: identical text, identity not verified.":"Target could not be verified.");}));
         fragment.append(button);
       }
       $("results").replaceChildren(fragment);
@@ -69,7 +81,7 @@
     busy=true;
     try {
       const s=await call("snapshot");
-      if(last?.status==="running" && s.status!=="running") await refreshCandidates();
+      if((last?.status==="running"||last?.verification?.running||last?.navBusy) && s.status!=="running" && !s.verification?.running && !s.navBusy) await refreshCandidates();
       busy=false; render(s);
       if ($("diagnostics").open) {
         busy=true;
@@ -84,15 +96,23 @@
     finally {busy=false; if(last) render(last);}
   }
   $("form").addEventListener("submit",e=>{e.preventDefault();void perform(async()=>{
-    render(await call("start",{id:Number($("container").value),query:$("query").value,sensitive:$("case").checked,pace:$("pace").value}));
+    render(await call("start",{id:Number($("container").value),query:$("query").value,sensitive:$("case").checked,pace:$("pace").value,rescan:$("rescan").checked}));
   });});
   $("stop").addEventListener("click",()=>void perform(async()=>render(await call("stop"))));
+  $("verify").addEventListener("click",()=>void perform(async()=>render(await call("verifyAll"))));
   $("restore").addEventListener("click",()=>void perform(async()=>render(await call("restore"))));
   $("clear").addEventListener("click",()=>void perform(async()=>{render(await call("clear"));$("query").value="";}));
   $("diagnostics").addEventListener("toggle",()=>{if ($("diagnostics").open) void poll();});
   $("copy-log").addEventListener("click",async()=>{
-    try {await navigator.clipboard.writeText($("log").value);message("Diagnostic log copied.");}
-    catch(e){$("log").focus();$("log").select();message("Clipboard unavailable. Copy the selected diagnostic log manually.");}
+    try {
+      // Fetch the live content-script journal, not the last polled textarea.
+      const value=await call("diagnostics");
+      $("log").value=value;
+      await navigator.clipboard.writeText(value);message("Diagnostic log copied.");
+    }catch(e){
+      $("diagnostics").open=true;$("log").focus();$("log").select();
+      message("Clipboard unavailable. Copy the selected diagnostic log manually.");
+    }
   });
   $("copy").addEventListener("click",async()=>{
     try {await navigator.clipboard.writeText(last.hits.map((h,i)=>(i+1)+". "+h.context+" ["+h.y+" px]").join("\n"));message("Copied.");}
@@ -104,7 +124,7 @@
       if (!tab?.id) throw new Error("No active tab.");
       await api.scripting.executeScript({target:{tabId:tab.id},files:["core.js","engine.js"]});
       const s=await call("snapshot");
-      if (s.query) { $("query").value=s.query; $("case").checked=s.sensitive; $("pace").value=s.pace || "normal"; }
+      if (s.query) { $("query").value=s.query; $("case").checked=s.sensitive; $("pace").value=s.pace || "normal"; $("rescan").checked=s.rescan!==false; }
       await refreshCandidates();render(s);
       if ($("diagnostics").open) await refreshLog();
       timer=setInterval(poll,400);
