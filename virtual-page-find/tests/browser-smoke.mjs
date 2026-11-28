@@ -86,6 +86,32 @@ async function reviewRegressions(page,name) {
   assert.equal(s.hits.length,1,JSON.stringify(s.hits));
   assert.equal(Math.floor(s.hits[0].y/40),20);
   assert.equal(s.pace,"normal");
+  assert.equal(s.hits[0].anchorKey,undefined,"shared spacer ID must not identify virtual rows");
+  const delayedJump=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(delayedJump.found,false);
+  assert.equal(delayedJump.outcome,"approximate");
+
+  // Identical unkeyed rows recycle the same child-node slots under one ID.
+  // Reject the common ancestor as identity in both directions: neither
+  // duplicate one logical row nor merge distinct rows that reuse a slot.
+  const unkeyed=await setup(`<div id="review-list"><div id="shared-list" style="height:1200px;position:relative"></div></div>
+    <script>(()=>{const el=document.querySelector("#review-list"),space=document.querySelector("#shared-list");let timer;
+    function draw(){const first=Math.max(0,Math.floor(el.scrollTop/40)-1),items=[];
+      for(let i=first;i<Math.min(30,first+8);i++){const row=document.createElement("div");
+        row.style.cssText="position:absolute;top:"+i*40+"px;height:40px;left:0;right:0";
+        row.dataset.vpfTestId="oracle-"+i;row.textContent=[4,12,20].includes(i)?"Yesterday":"Row "+i;items.push(row);}
+      space.replaceChildren(...items);}
+    el.addEventListener("scroll",()=>{clearTimeout(timer);timer=setTimeout(draw,70);});draw();})();</script>`);
+  s=await scan(unkeyed,"fast");
+  assert.equal(s.hits.length,3,JSON.stringify(s.hits));
+  assert.deepEqual(s.hits.map(h=>Math.floor(h.y/40)),[4,12,20]);
+  assert.ok(s.hits.every(h=>!h.anchorKey));
+  for(let index=0;index<3;index++){
+    const result=await page.evaluate(index=>window.__virtualPageFindV1.jump({index}),index);
+    assert.equal(result.outcome,"approximate");
+    assert.equal(result.found,false);
+  }
+  console.log(name+": passed unkeyed virtual rows with shared ancestor ID, no false duplicates/merges or verified identities");
 
   const sticky=await setup('<div id="review-list"><div id="sticky-label" style="position:sticky;top:0;background:white">Yesterday Yesterday</div><div style="height:900px"></div><div>Yesterday</div></div>');
   s=await scan(sticky,"fast");

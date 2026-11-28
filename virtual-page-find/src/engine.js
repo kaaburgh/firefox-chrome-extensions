@@ -78,11 +78,15 @@
     for(const index of path) {node=node?.childNodes[index];if(!node)return null;}
     return node;
   }
-  function makeAnchor(root,first,last,start,end,cache) {
+  function makeAnchor(root,first,last,start,end,cache,matchBlock) {
     // Prefer application record IDs over incidental HTML IDs, even if the
     // latter are closer to the text node.
     for(const attr of anchorAttrs) {
       for(let p=first.parentElement;p && p!==root;p=p.parentElement) {
+        // A generic HTML ID identifies the element itself, not the logical
+        // items in a changing subtree. Never use a generic ID above the
+        // matched text block (e.g. a virtual list's persistent spacer).
+        if(attr==="id" && !matchBlock.contains(p)) break;
         if(!p.contains(last)) continue;
         const value=p.getAttribute(attr);
         if(!value || value.length>256) continue;
@@ -170,7 +174,7 @@
         const hit = { match:text.slice(m.start,m.end), context:(before+"["+text.slice(m.start,m.end)+"]"+after).replace(/\s+/g," "),
           y:Math.round(scrollY+rect.top-originY), x:Math.round(scrollX+rect.left-originX) };
         const last=offsets.find(p=>p.end>=m.end);
-        const anchor=makeAnchor(base,offsets[first].node,last.node,m.start-offsets[first].start,m.end-last.start,anchorCache);
+        const anchor=makeAnchor(base,offsets[first].node,last.node,m.start-offsets[first].start,m.end-last.start,anchorCache,groupBlock);
         if(anchor) {
           hit.anchor=anchor;
           hit.anchorKey=JSON.stringify([anchor.attr,anchor.value,anchor.a,anchor.b,anchor.start,anchor.end,hit.match]);
