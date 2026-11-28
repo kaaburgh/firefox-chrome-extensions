@@ -494,7 +494,7 @@ async function clickDiagnosticsRegression(page,name) {
   assert.match(log,/nav-settle [^\n]*firstVisible=/);
   assert.match(log,/nav-direct-state [^\n]*sameAnchor=/);
   assert.match(log,/nav-click-end index=1 [^\n]*outcome=verified/);
-  assert.match(log,/nav-post click=2 index=1 [^\n]*outcome=not-found/);
+  assert.match(log,/nav-post click=2 index=1 [^\n]*observed=not-found/);
   const state=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
   assert.equal(state.lastJump.index,1);assert.equal(state.lastJump.click,2);assert.equal(state.lastJump.outcome,"verified");
   assert.ok(!["Yesterday","private first","private second","private-first","private-second","private-scroll-container","http://","https://"].some(v=>log.includes(v)));

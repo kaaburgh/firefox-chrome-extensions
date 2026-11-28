@@ -457,7 +457,12 @@
     const root=j.root, base=isDocument(root)?document.body||root:root;
     const {attr,value,a,b,start,end}=hit.anchor;
     let element=anchorElement(base,attr,value);
-    if(!element)return fail("absent-or-ambiguous-id");
+    if(!element){
+      if(!detail)return null;
+      const count=base.querySelectorAll("["+attr+"=\""+CSS.escape(value)+"\"]").length;
+      detail.idMatches=count;
+      return fail(count===0?"id-not-mounted":"id-ambiguous");
+    }
     for(let i=0;i<(hit.anchor.up||0);i++){element=element.parentElement;if(!element || element===base)return fail("wrapper-changed");}
     const first=atPath(element,a), last=atPath(element,b);
     if(first?.nodeType!==Node.TEXT_NODE || last?.nodeType!==Node.TEXT_NODE ||
@@ -549,9 +554,12 @@
   // exception messages leave the diagnostic path. Result ordinals are
   // enough to correlate a manual test with the user's list.
   function targetState(j,hit) {
-    const detail={}, root=j.root, v=viewport(root), y=locateMounted(j,hit,detail);
-    return {top:Math.round(top(root)),rawTop:Math.round(root.scrollTop),range:Math.round(max(root)),height:Math.round(v.height),
-      mountedY:y===null?-1:Math.round(y),...detail, ...(()=>{const d={};const outcome=inspectPosition(j,hit,d);return {...d,outcome};})()};
+    try{
+      const detail={}, root=j.root, v=viewport(root), y=locateMounted(j,hit,detail);
+      const observed=inspectPosition(j,hit,detail);
+      return {top:Math.round(top(root)),rawTop:Math.round(root.scrollTop),range:Math.round(max(root)),height:Math.round(v.height),
+        mountedY:y===null?-1:Math.round(y),...detail,observed};
+    }catch{return {stateUnavailable:true};}
   }
   function environment(j) {
     const ua=navigator.userAgent, firefox=ua.match(/Firefox\/(\d+)/), chrome=ua.match(/(?:Chrome|Chromium)\/(\d+)/);
@@ -731,7 +739,7 @@
       }
     }
     if(outcome==="not-found" && s.alive()){
-      if(j.activeClick)log(j,"nav-fallback",{from:hit.anchorKey?"local":"direct",to:"replay",reason:"target-not-verified"});
+      if(j.activeClick)log(j,"nav-fallback",{from:hit.anchorKey?"local":"direct",to:"replay",reason:"target-not-verified",...targetState(j,hit)});
       method="replay";
       outcome=await replayTo(j,hit,index,s);
     }
@@ -757,7 +765,7 @@
     }};
     for(const type of events)window.addEventListener(type,interrupt,{capture:true,passive:true});
     try {
-      if(click===1)environment(j);
+      if(!j.environmentLogged){environment(j);j.environmentLogged=true;}
       log(j,"nav-click-start",{index:index+1,previous:previous?.index||0,lastVerified:j.lastVerified?j.lastVerified.index+1:0,savedY:hit.y,anchorType:hit.anchor?.attr||"none",sibling:!!hit.anchor?.up,pace:j.pace,...targetState(j,hit)});
       session=navigationSession(j,()=>cancelled);
       result=await navigate(j,hit,index,session);
