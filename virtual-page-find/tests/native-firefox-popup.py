@@ -8,6 +8,8 @@ import hashlib
 import http.server
 import pathlib
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 
@@ -22,7 +24,7 @@ ADDON_ID = "virtual-page-find@kaaburgh"
 WIDGET_ID = "virtual-page-find_kaaburgh-browser-action"
 
 def main():
-    packages = list((ROOT / "dist").glob("virtual-page-find-firefox-*.zip"))
+    packages = [pathlib.Path(p) for p in sys.argv[1:]] or list((ROOT / "dist").glob("virtual-page-find-firefox-*.zip"))
     assert len(packages) == 1, packages
     package = packages[0].resolve()
     print("Testing", package.name, "sha256", hashlib.sha256(package.read_bytes()).hexdigest(), flush=True)
@@ -52,7 +54,20 @@ def main():
                     """, WIDGET_ID)
                     wait = WebDriverWait(driver, 15)
                     button = wait.until(lambda d: d.find_element(By.ID, WIDGET_ID))
-                    button.click()
+                    # Use actual X11 pointer input, not a WebDriver XUL click.
+                    coords = driver.execute_script("""
+                        const button = arguments[0], r = button.getBoundingClientRect();
+                        return {x:Math.round((window.mozInnerScreenX+r.x+r.width/2)*devicePixelRatio),
+                            y:Math.round((window.mozInnerScreenY+r.y+r.height/2)*devicePixelRatio),
+                            width:r.width,height:r.height,disabled:button.disabled,
+                            hidden:button.hidden,scale:devicePixelRatio};
+                    """, button)
+                    print("Toolbar coordinates", coords, flush=True)
+                    assert coords["width"] > 0 and coords["height"] > 0 and not coords["disabled"]
+                    windows = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--name", "Local extension fixture"], text=True).split()
+                    assert windows, "Fixture browser window is missing"
+                    subprocess.run(["xdotool", "windowfocus", "--sync", windows[-1]], check=True)
+                    subprocess.run(["xdotool", "mousemove", "--sync", str(coords["x"]), str(coords["y"]), "click", "1"], check=True)
                     def open_popup(d):
                         return d.execute_script("""
                             for (const browser of document.querySelectorAll("browser")) {

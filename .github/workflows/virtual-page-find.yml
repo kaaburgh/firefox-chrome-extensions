@@ -58,14 +58,23 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Build and install native browser test dependency
         run: |
           python3 build.py
+          sudo apt-get update -qq
+          sudo apt-get install -y xdotool
+          mkdir -p "$RUNNER_TEMP/vpf-baseline"
+          git archive 36e1d0b64647080e89d296d42b89e04b574228e3 virtual-page-find | tar -x -C "$RUNNER_TEMP/vpf-baseline"
+          (cd "$RUNNER_TEMP/vpf-baseline/virtual-page-find" && python3 build.py)
           firefox --version
           geckodriver --version
           python3 -m venv "$RUNNER_TEMP/vpf-native"
           "$RUNNER_TEMP/vpf-native/bin/pip" install selenium==4.38.0
-      - name: Open actual Firefox toolbar popup from built ZIP
+      - name: Open baseline Firefox toolbar popup
+        run: xvfb-run -a "$RUNNER_TEMP/vpf-native/bin/python" tests/native-firefox-popup.py "$RUNNER_TEMP/vpf-baseline/virtual-page-find/dist/virtual-page-find-firefox-0.2.13.zip"
+      - name: Open current Firefox toolbar popup
+        if: always()
         run: xvfb-run -a "$RUNNER_TEMP/vpf-native/bin/python" tests/native-firefox-popup.py
 
   shared-chat:
