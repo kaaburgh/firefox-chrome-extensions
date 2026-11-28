@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.1)
+# Virtual Page Find (0.2.2)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -47,3 +47,5 @@ Where available, matches store a unique application-owned DOM identifier (data-m
 **Verify all positions** visits up to 100 results, reports verified/approximate/not found counts and per-result outcomes, and restores the pre-check scroll position unless manually interrupted. Stop cancels the check. This checks consistency of the recorded matches, not whether the search missed anything. For an independent oracle, serve the repository using the existing local HTTP server and open `http://localhost:8000/tests/navigation-fixture.html`. Search Yesterday in the main container; four identical matches are expected. Playwright additionally asserts each jump lands on its known test-only oracle marker (not read by the extension), and verifies rejection of an identical-text replacement with a different identity.
 
 Version 0.2.1 fixes the 0.2.0 integration-test regression where a persistent virtual-list spacer ID plus a changing child-node path created duplicate hits or merged independent rows. Regression coverage includes a 350 ms debounced list and three identical unkeyed rows under one shared ancestor ID; no verified identity is claimed for those rows.
+
+Version 0.2.2 adds sequential navigation replay when a direct jump cannot locate the saved occurrence. It starts from a stable top and uses the same overlapping viewport steps and mutation/geometry quiet checks as scanning. Batch verification reuses the forward replay cursor. A replay still requires matching context and coordinates for an unanchored hit and never calls it verified; it does not substitute a nearby occurrence. Navigation shares a 180-second/1200-step budget per operation, and page input interrupts it. The log distinguishes direct attempts, replay steps and final outcomes. The new browser fixture simulates a virtualizer that rejects large jumps and uses independent oracle rows. This is a reproduction of the observed failure mode, not the actual ChatGPT implementation.

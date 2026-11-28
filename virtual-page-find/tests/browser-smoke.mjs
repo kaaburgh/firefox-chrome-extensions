@@ -55,6 +55,7 @@ async function test(name, browserType) {
     console.log(name+": passed container discovery, seven/six matches, inline split, repeated labels, jump, restoration, cancellation");
     await reviewRegressions(page, name);
     await navigationRegressions(page,name);
+    await replayNavigationRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -221,6 +222,51 @@ async function navigationRegressions(page,name) {
   const ambiguous=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
   assert.equal(ambiguous.found,false);assert.equal(ambiguous.outcome,"approximate");
   console.log(name+": passed two-pass reflow, four independent oracle positions, batch verification and rejection of a wrong identity");
+}
+
+async function replayNavigationRegression(page,name) {
+  // Model a virtualizer that accepts successive viewport steps but moves the
+  // scroll offset elsewhere when a large jump crosses unmounted content.
+  await page.setContent(`<!doctype html><style>#replay-list{height:240px;width:500px;overflow:auto;overflow-anchor:none}#replay-space{height:1600px;position:relative}.row{position:absolute;left:0;right:0;height:40px}</style>
+    <div id="replay-list"><div id="replay-space"></div></div><script>(()=>{
+      const el=document.querySelector("#replay-list"),space=document.querySelector("#replay-space");
+      let previous=0,timer;
+      function draw(){const first=Math.max(0,Math.floor(el.scrollTop/40)-2),items=[];
+        for(let i=first;i<Math.min(40,first+10);i++){const row=document.createElement("div");
+          row.className="row";row.style.top=i*40+"px";row.dataset.vpfTestId="oracle-"+i;
+          row.textContent=[8,20,32].includes(i)?"Yesterday":"Row "+i;items.push(row);}
+        space.replaceChildren(...items);}
+      el.addEventListener("scroll",()=>{clearTimeout(timer);
+        if(el.scrollTop!==0 && Math.abs(el.scrollTop-previous)>el.clientHeight){el.scrollTop=0;}
+        previous=el.scrollTop;timer=setTimeout(draw,70);});draw();
+    })();</script>`);
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#replay-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.status,"traversed");assert.equal(s.hits.length,3);assert.ok(s.hits.every(h=>!h.anchorKey));
+  // The jump really lands on row 32, not simply any identical match.
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:2}));
+  assert.equal(result.outcome,"approximate");assert.equal(result.found,false);
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#replay-list"),row=el.querySelector('[data-vpf-test-id="oracle-32"]');
+    if(!row)return false;const a=el.getBoundingClientRect(),b=row.getBoundingClientRect();
+    return b.bottom>a.top && b.top<a.bottom;
+  }),true);
+  let diagnostic=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.match(diagnostic,/jump-direct index=3 [^\n]*outcome=not-found/);
+  assert.match(diagnostic,/jump index=3 [^\n]*method=replay outcome=approximate/);
+  await page.evaluate(()=>window.__virtualPageFindV1.restore());
+  await page.waitForTimeout(300);
+  await page.evaluate(()=>window.__virtualPageFindV1.verifyAll());
+  await page.waitForFunction(()=>!window.__virtualPageFindV1.snapshot().verification.running,null,{timeout:90000});
+  const v=await page.evaluate(()=>window.__virtualPageFindV1.snapshot().verification);
+  assert.equal(v.checked,3);assert.equal(v.verified,0);assert.equal(v.approximate,3);
+  diagnostic=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  const batch=diagnostic.slice(diagnostic.lastIndexOf("verify-start"));
+  assert.equal((batch.match(/jump-replay-start/g)||[]).length,1,"batch must reuse forward replay");
+  assert.equal(await page.locator("#replay-list").evaluate(el=>el.scrollTop),0);
+  console.log(name+": passed rejected direct jump, incremental replay to independent oracle row, and shared batch replay without false verification");
 }
 
 async function popupSizing(page,name) {

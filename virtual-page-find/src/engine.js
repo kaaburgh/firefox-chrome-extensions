@@ -393,36 +393,123 @@
     const origin=isDocument(root)?0:root.getBoundingClientRect().top+root.clientTop;
     return top(root)+rect.top-origin;
   }
-  async function navigate(j,hit,index) {
+  // A large jump can change the virtualizer's estimated geometry. Replay
+  // the same forward viewport traversal when the direct jump cannot find
+  // the recorded occurrence. A batch reuses its forward traversal cursor.
+  function navigationSession(j, cancelled) {
+    const root=j.root, started=performance.now();
+    let lastMutation=started;
+    const observer=new MutationObserver(()=>{lastMutation=performance.now();});
+    observer.observe(isDocument(root)?document.documentElement:root,{childList:true,subtree:true,characterData:true});
+    const session={replay:false,steps:0,close:()=>observer.disconnect()};
+    session.alive=()=>!cancelled() && root.isConnected && session.steps<LIMIT.steps && performance.now()-started<LIMIT.ms;
+    session.settle=async(minimum=waits[j.pace])=>{
+      const begin=performance.now();
+      let lastChange=begin, previous=[top(root),max(root)];
+      while(session.alive()){
+        await pause(50);
+        if(!session.alive())return false;
+        const now=performance.now(), current=[top(root),max(root)];
+        if(current[0]!==previous[0] || current[1]!==previous[1]){lastChange=now;previous=current;}
+        if(now-begin>=minimum && now-Math.max(lastMutation,lastChange)>=160)return true;
+        if(now-begin>=Math.max(1500,minimum+500))return false;
+      }
+      return false;
+    };
+    return session;
+  }
+  function inspectPosition(j,hit) {
+    let exact=false, approximate=false;
+    const result=collect(j.root,j.query,j.sensitive,h=>{
+      if(hit.anchorKey && h.anchorKey===hit.anchorKey && h.context===hit.context)exact=true;
+      if(h.context===hit.context && (hit.pinnedKey ? h.pinnedKey===hit.pinnedKey : Math.abs(h.y-hit.y)<10 && Math.abs(h.x-hit.x)<10))approximate=true;
+      // Collect the entire viewport so a stop caused by an exact match
+      // is not mistaken for an inspection limit.
+      return true;
+    },j.identities);
+    if(result.problem)return "not-found";
+    return exact?"verified":approximate?"approximate":"not-found";
+  }
+  async function replayTo(j,hit,index,s) {
     const root=j.root;
-    if(!root.isConnected || !hit || !Number.isFinite(hit.y))return {found:false,outcome:"not-found"};
+    if(!s.replay || top(root)>hit.y+10){
+      s.replay=false;
+      log(j,"jump-replay-start",{index:index+1,from:Math.round(top(root)),savedY:hit.y});
+      let stable=0;
+      for(let attempt=0;attempt<10 && stable<2 && s.alive();attempt++){
+        const oldRange=max(root);
+        move(root,0);s.steps++;
+        if(!await s.settle(Math.max(500,waits[j.pace])))return "not-found";
+        stable=top(root)<=2 && Math.abs(max(root)-oldRange)<=2?stable+1:0;
+      }
+      if(stable<2)return "not-found";
+      s.replay=true;
+    }
+    while(s.alive()){
+      const current=top(root), range=max(root), height=viewport(root).height;
+      const outcome=inspectPosition(j,hit);
+      log(j,"jump-replay-view",{index:index+1,top:Math.round(current),range:Math.round(range),outcome});
+      if(outcome!=="not-found")return outcome;
+      // For unanchored hits, do not substitute a nearby occurrence; only
+      // accept the same context and coordinate as during the scan.
+      if(current>hit.y+10 || current>=range-2 || height<1)return "not-found";
+      const target=core.nextTop(current,height,range);
+      move(root,target);s.steps++;
+      if(!await s.settle())return "not-found";
+      const actual=top(root);
+      log(j,"jump-replay-scroll",{index:index+1,from:Math.round(current),target:Math.round(target),actual:Math.round(actual),range:Math.round(max(root))});
+      if(actual<=current+0.5 || actual-current>height+2){
+        s.replay=false;
+        log(j,"jump-replay-gap",{index:index+1});
+        return "not-found";
+      }
+    }
+    return "not-found";
+  }
+  async function navigate(j,hit,index,s) {
+    const root=j.root;
+    if(!root.isConnected || !hit || !Number.isFinite(hit.y) || !s.alive())return {found:false,outcome:"not-found"};
     const mounted=locateMounted(j,hit);
     const target=Math.max(0,(mounted ?? hit.y)-viewport(root).height*0.35);
-    move(root,target);
-    await pause(Math.max(500,waits[j.pace])+160);
-    let exact=null, approximate=false;
-    if(root.isConnected) collect(root,j.query,j.sensitive,h=>{
-      if(hit.anchorKey && h.anchorKey===hit.anchorKey && h.context===hit.context) exact=h;
-      if(h.context===hit.context && (hit.pinnedKey ? h.pinnedKey===hit.pinnedKey : Math.abs(h.y-hit.y)<10 && Math.abs(h.x-hit.x)<10))approximate=true;
-      return !exact;
-    },j.identities);
-    const outcome=exact?"verified":approximate?"approximate":"not-found";
-    log(j,"jump",{index:index+1,savedY:hit.y,target:Math.round(target),actual:Math.round(top(root)),range:Math.round(max(root)),anchored:!!hit.anchorKey,mounted:mounted!==null,outcome});
+    let outcome="not-found", method="direct";
+    if(!s.replay){
+      move(root,target);s.steps++;
+      const settled=await s.settle(Math.max(500,waits[j.pace])+160);
+      if(settled && s.alive())outcome=inspectPosition(j,hit);
+      log(j,"jump-direct",{index:index+1,savedY:hit.y,target:Math.round(target),actual:Math.round(top(root)),range:Math.round(max(root)),settled,outcome});
+    }
+    if(outcome==="not-found" && s.alive()){
+      method="replay";
+      outcome=await replayTo(j,hit,index,s);
+    }
+    log(j,"jump",{index:index+1,savedY:hit.y,target:Math.round(target),actual:Math.round(top(root)),range:Math.round(max(root)),anchored:!!hit.anchorKey,mounted:mounted!==null,method,outcome});
     return {found:outcome==="verified",outcome};
   }
   async function jump(args) {
     const j=job;
     if(!j || j.status==="running" || j.navBusy || j.verification?.running)throw new Error("Finish the current operation first.");
     const hits=ordered(j),index=args.index;
-    // The popup supplies an index only; never navigate using arbitrary page-supplied coordinates.
     const hit=hits[index];
     if(!Number.isInteger(index)||!hit)throw new Error("Result is no longer available.");
+    if(!j.root.isConnected)throw new Error("Scroll container disappeared.");
     j.navBusy=true;
-    try{return await navigate(j,hit,index);}finally{j.navBusy=false;}
+    let cancelled=false, session;
+    const events=["wheel","touchstart","pointerdown","keydown"];
+    const interrupt=e=>{if(e.isTrusted && (e.type!=="keydown" || ["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "].includes(e.key)))cancelled=true;};
+    for(const type of events)window.addEventListener(type,interrupt,{capture:true,passive:true});
+    try {
+      session=navigationSession(j,()=>cancelled);
+      return await navigate(j,hit,index,session);
+    }finally{
+      session?.close();
+      for(const type of events)window.removeEventListener(type,interrupt,true);
+      j.navBusy=false;
+    }
   }
   function verifyAll() {
     const j=job;
     if(!j || j.status==="running" || j.navBusy || j.verification?.running)throw new Error("Finish the current operation first.");
+    if(!j.root.isConnected)throw new Error("Scroll container disappeared.");
     const hits=ordered(j), limit=Math.min(hits.length,100), original=j.root.scrollTop;
     const v=j.verification={running:true,cancel:false,manual:false,total:hits.length,limit,checked:0,verified:0,approximate:0,notFound:0,results:[]};
     const events=["wheel","touchstart","pointerdown","keydown"];
@@ -430,10 +517,12 @@
     async function runVerification(){
       log(j,"verify-start",{total:hits.length,limit});
       for(const type of events)window.addEventListener(type,interrupt,{capture:true,passive:true});
+      let session;
       try {
-        for(let i=0;i<limit && !v.cancel && j.root.isConnected;i++){
-          const result=await navigate(j,hits[i],i);
-          if(v.cancel)break;
+        session=navigationSession(j,()=>v.cancel);
+        for(let i=0;i<limit && session.alive();i++){
+          const result=await navigate(j,hits[i],i,session);
+          if(v.cancel || !j.root.isConnected)break;
           v.checked++;v.results.push(result.outcome);
           if(result.outcome==="verified")v.verified++;
           else if(result.outcome==="approximate")v.approximate++;
@@ -441,6 +530,8 @@
         }
       }catch{v.cancel=true;log(j,"verify-error");}
       finally{
+        session?.close();
+        if(!v.cancel && v.checked<limit)log(j,"verify-limit",{checked:v.checked,limit});
         for(const type of events)window.removeEventListener(type,interrupt,true);
         if(!v.manual && j.root.isConnected)try{moveRaw(j.root,original);}catch{log(j,"verify-restore-error");}
         v.running=false;
