@@ -65,6 +65,7 @@ async function test(name, browserType) {
     await clickDiagnosticsRegression(page,name);
     await turnKeyRegression(page,name);
     await identityReviewRegression(page,name);
+    await predictionRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -487,7 +488,7 @@ async function clickDiagnosticsRegression(page,name) {
   await page.evaluate(()=>{setTimeout(()=>{document.querySelector("#private-scroll-container").scrollTop=0;},250);});
   await page.waitForTimeout(1400);
   const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
-  assert.ok(log.includes("Extension: 0.2.13"));
+  assert.ok(log.includes("Extension: 0.2.14"));
   assert.match(log,/nav-environment [^\n]*browser=/);
   assert.match(log,/nav-click-start index=2 [^\n]*click=1/);
   assert.match(log,/nav-click-start index=1 previous=2 [^\n]*click=2/);
@@ -585,6 +586,70 @@ async function identityReviewRegression(page,name) {
     return !!a && a.getBoundingClientRect().top>=el.getBoundingClientRect().top && a.getBoundingClientRect().bottom<=el.getBoundingClientRect().bottom;
   }),true);
   console.log(name+": passed changing paths/anchor availability and recovery past conflicting identity");
+}
+
+async function predictionRegression(page,name) {
+  await page.setContent('<style>#predict-list{height:240px;width:500px;overflow:auto;overflow-anchor:none}#predict-space{position:relative}.row{position:absolute;height:400px;width:100%}</style><div id="predict-list"><div id="predict-space"></div></div>');
+  await page.evaluate(()=>{
+    const el=document.querySelector("#predict-list"),space=document.querySelector("#predict-space");
+    let prefix=1200;
+    function render(){
+      space.style.height=prefix+2800+"px";
+      const first=Math.max(0,Math.floor((el.scrollTop-prefix)/400)-1);
+      space.replaceChildren();
+      for(let i=first;i<Math.min(6,first+3);i++){
+        const row=document.createElement("div");row.className="row";
+        row.style.top=prefix+i*400+"px";row.dataset.itemId="row-"+i;row.textContent="Yesterday";space.append(row);
+      }
+    }
+    let timer;el.addEventListener("scroll",()=>{clearTimeout(timer);timer=setTimeout(render,70);});
+    globalThis.__shiftPrefix=()=>{prefix=300;el.scrollTop-=900;render();};render();
+  });
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#predict-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.snapshot())).hits.length,6);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}))).outcome,"verified");
+  await page.evaluate(()=>globalThis.__shiftPrefix());
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator('[data-item-id="row-4"]').count(),0);
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:4}));
+  assert.equal(result.outcome,"verified");assert.equal(result.method,"direct");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#predict-list"),row=el.querySelector('[data-item-id="row-4"]');
+    if(!row)return false;const range=document.createRange();range.selectNodeContents(row);
+    const a=el.getBoundingClientRect(),b=range.getBoundingClientRect();
+    return b.top>=a.top&&b.bottom<=a.bottom;
+  }),true);
+  let log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.match(log,/nav-prediction index=5 source=2 correction=-900 /);
+  assert.match(log,/nav-click-end index=5 [^\n]*steps=1 /);
+  // First landing causes a prefix collapse and temporarily unmounts the
+  // exact target. A single range-based correction remounts it.
+  await page.setContent('<div id="predict-list" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div id="before-predict" style="height:1200px"></div><div data-item-id="target" style="height:40px">Yesterday</div><div style="height:1200px"></div></div>');
+  const nextId=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#predict-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),nextId);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  await page.evaluate(()=>{
+    const el=document.querySelector("#predict-list"),before=document.querySelector("#before-predict"),row=el.querySelector("[data-item-id]"),placeholder=document.createElement("div");
+    placeholder.style.height="40px";let moved=false;
+    el.addEventListener("scroll",()=>{
+      if(!moved&&el.scrollTop>700){moved=true;before.style.height="400px";row.replaceWith(placeholder);el.scrollTop=0;}
+      else if(moved&&el.scrollTop>200&&el.scrollTop<600&&!row.isConnected)placeholder.replaceWith(row);
+    });
+  });
+  const recovered=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(recovered.outcome,"verified");assert.equal(recovered.method,"direct");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#predict-list"),row=el.querySelector('[data-item-id="target"]');
+    if(!row)return false;const a=el.getBoundingClientRect(),b=row.getBoundingClientRect();
+    return b.top>=a.top&&b.bottom<=a.bottom;
+  }),true);
+  log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.match(log,/nav-correction index=1 correction=-800 /);
+  assert.match(log,/nav-correction-end index=1 [^\n]*outcome=verified/);
+  assert.match(log,/nav-click-end index=1 [^\n]*steps=2 /);
+  console.log(name+": passed verified-source coordinate prediction and one corrected retry after layout collapse");
 }
 
 async function popupSizing(page,name) {

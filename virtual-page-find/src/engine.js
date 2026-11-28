@@ -288,7 +288,7 @@
     if (!job) return "";
     return [
       "Virtual Page Find diagnostic log v2",
-      "Extension: 0.2.13",
+      "Extension: 0.2.14",
       "Started UTC: "+job.startedUTC,
       "Status: "+job.status+"; pace: "+job.pace+"; matches: "+job.idx.items.length,
       ...(job.droppedLogs ? ["Earlier records discarded: "+job.droppedLogs] : []),
@@ -619,7 +619,7 @@
     }
     return "not-found";
   }
-  async function localTo(j,hit,index,s) {
+  async function localTo(j,hit,index,s,estimate=hit.y) {
     // A short bidirectional probe from the direct landing position.
     // When the target coordinate was reached but identity was not, explore
     // the adjacent viewports instead of assuming the coordinate is correct.
@@ -628,7 +628,7 @@
     if(height<1)return "not-found";
     const step=Math.max(1,Math.floor(height*0.65));
     const initialMounted=locateMounted(j,hit);
-    const initialWanted=Math.max(0,(initialMounted??hit.y)-height*0.35);
+    const initialWanted=Math.max(0,(initialMounted??estimate)-height*0.35);
     if(initialMounted===null && Math.abs(initialWanted-base)>height*4)return "not-found";
     const direction=initialWanted-base>height*0.25?1:-1;
     // Visit one viewport in the preferred direction, then return through
@@ -712,17 +712,27 @@
       const relativeEligible=mounted===null && !!hit.anchorKey && !!source && source.index!==index &&
          Math.abs(hit.y-source.hit.y)<=height*9;
       const sourceVisible=relativeEligible && anchoredVisible(j,source.hit);
+      // Saved distances can remain valid when the virtualizer changes
+      // the height of preceding content. Only a verified visible source
+      // supplies a correction; backward moves keep the safer relative path.
+      const sourceY=sourceVisible?locateMounted(j,source.hit):null;
+      const correction=sourceY===null?0:sourceY-source.hit.y;
+      const predicted=hit.y+correction-height*0.35;
+      const usePrediction=sourceY!==null && index>source.index && Math.abs(correction)>3 && predicted>=0 && predicted<=max(root);
       if(j.activeClick)log(j,"nav-choice",{index:index+1,source:source?source.index+1:0,mounted:mounted!==null,anchored:!!hit.anchorKey,
         savedDistance:source?Math.round(hit.y-source.hit.y):0,relativeEligible,sourceVisible:!!sourceVisible,
-        reason:mounted!==null?"target-mounted":!hit.anchorKey?"no-anchor":!source?"no-source":source.index===index?"same-source":!relativeEligible?"source-too-far":!sourceVisible?"source-not-visible":"relative"});
-      if(relativeEligible && sourceVisible){
+        reason:mounted!==null?"target-mounted":!hit.anchorKey?"no-anchor":!source?"no-source":source.index===index?"same-source":!relativeEligible?"source-too-far":!sourceVisible?"source-not-visible":usePrediction?"predicted":"relative"});
+      if(usePrediction)log(j,"nav-prediction",{index:index+1,source:source.index+1,correction:Math.round(correction),predicted:Math.round(predicted)});
+      if(relativeEligible && sourceVisible && !usePrediction){
         outcome=await relativeTo(j,hit,index,s,source);
         if(outcome==="verified")method="relative";
         else if(j.activeClick)log(j,"nav-fallback",{from:"relative",to:"direct",reason:"target-not-verified"});
       }
       if(outcome==="not-found" && s.alive()){
       mounted=locateMounted(j,hit);
-      target=Math.max(0,(mounted??hit.y)-viewport(root).height*0.35);
+      let estimate=mounted??(usePrediction?hit.y+correction:hit.y);
+      target=Math.max(0,estimate-viewport(root).height*0.35);
+      const rangeBefore=max(root);
       s.move(target,"direct");
       const settleState=await s.settle(Math.max(500,waits[j.pace])+160,hit);
       const settled=settleState!=="interrupted";
@@ -731,9 +741,23 @@
       if(outcome!=="verified" && s.alive() && await confirmVisible(j,hit,s))outcome="verified";
       log(j,"jump-direct",{index:index+1,savedY:hit.y,target:Math.round(target),actual:Math.round(top(root)),range:Math.round(max(root)),settled,settleState,outcome});
       if(j.activeClick)log(j,"nav-direct-state",{index:index+1,...targetState(j,hit)});
+      // One bounded corrective retry: the target's fresh geometry is
+      // preferred. Otherwise a large range delta is only a position hint.
+      if(outcome==="not-found" && s.alive() && hit.anchorKey){
+        const rangeDelta=max(root)-rangeBefore, newY=locateMounted(j,hit);
+        const corrected=Math.max(0,Math.min(max(root),newY===null?target+rangeDelta:newY-viewport(root).height*0.35));
+        if((newY!==null || Math.abs(rangeDelta)>height*0.5) && Math.abs(corrected-top(root))>3){
+          estimate=corrected+viewport(root).height*0.35;
+          log(j,"nav-correction",{index:index+1,correction:Math.round(rangeDelta),predicted:Math.round(corrected),mounted:newY!==null});
+          s.move(corrected,"direct");
+          const state=await s.settle(Math.max(500,waits[j.pace])+160,hit);
+          if(s.alive() && state!=="interrupted")outcome=inspectPosition(j,hit);
+          log(j,"nav-correction-end",{index:index+1,actual:Math.round(top(root)),outcome});
+        }
+      }
       if(outcome==="not-found" && s.alive() && hit.anchorKey){
         if(j.activeClick)log(j,"nav-fallback",{from:"direct",to:"local",reason:"target-not-verified"});
-        outcome=await localTo(j,hit,index,s);
+        outcome=await localTo(j,hit,index,s,estimate);
         if(outcome==="verified")method="local";
       }
       }

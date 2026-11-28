@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.13)
+# Virtual Page Find (0.2.14)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -81,3 +81,5 @@ Version 0.2.11 adds automatic local click tracing without changing navigation st
 Version 0.2.12 recognizes unique ancestor `data-content-search-turn-key` and `data-turn-key` attributes, observed in the signed-in virtualized ChatGPT transcript. Existing message/turn/item ID priorities and generic-ID safeguards remain unchanged. Missing or ambiguous keys fall through to the next supported attribute. Keys and text paths are checked again on navigation; values are never logged. A remounting fixture mirrors the observed nested `data-virtualized-turn` → `data-turn-key` → `data-content-search-turn-key` → timestamp structure, including missing and duplicate keys. Actual signed-in browser verification remains manual; public shared-chat CI covers the existing sibling-anchor path.
 
 Version 0.2.13 addresses PR review: reconcile overlapping observations of the same record when its anchor appears or text path changes at the same coordinates; do not accept a conflicting known anchor as an approximate navigation success; refresh container discovery when a popup reopened during navigation becomes idle. Existing fallback strategies remain unchanged.
+
+Version 0.2.14 experiments with two bounded navigation optimizations. For an unmounted forward target near a still-visible verified source, a nonzero observed source displacement supplies a corrected direct landing coordinate if it is inside the current scroll range. Backward targets retain the existing relative strategy. After a failed direct move, one corrective retry uses fresh mounted geometry or a substantial scroll-range delta as a hint; subsequent local recovery uses the updated estimate. Every success still requires the existing identity/visibility checks. No scan or navigation wait changes in this experiment. New tests model a uniform prefix shift and a direct landing that collapses the prefix and unmounts the target. Live CI reports prediction and correction attempts separately.
