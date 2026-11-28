@@ -47,7 +47,7 @@ def main():
                     driver.set_context("chrome")
                     driver.execute_script("""
                         const {CustomizableUI} = ChromeUtils.importESModule(
-                            "resource:///modules/CustomizableUI.sys.mjs");
+                            "moz-src:///browser/components/customizableui/CustomizableUI.sys.mjs");
                         CustomizableUI.addWidgetToArea(arguments[0], CustomizableUI.AREA_NAVBAR);
                     """, WIDGET_ID)
                     wait = WebDriverWait(driver, 15)
