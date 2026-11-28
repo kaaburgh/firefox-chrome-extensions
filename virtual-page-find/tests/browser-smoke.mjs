@@ -58,6 +58,7 @@ async function test(name, browserType) {
     await replayNavigationRegression(page,name);
     await siblingAnchorRegression(page,name);
     await offscreenMutationRegression(page,name);
+    await busyNavigationRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -336,6 +337,38 @@ async function offscreenMutationRegression(page,name) {
   assert.equal(s.hits.length,2);
   assert.match(await page.evaluate(()=>window.__virtualPageFindV1.diagnostics()),/ignoredMutations=[1-9]\d*/);
   console.log(name+": passed offscreen text mutation settling without suppressing visible updates");
+}
+
+async function busyNavigationRegression(page,name) {
+  await page.setContent('<!doctype html><style>#busy-list{height:240px;width:500px;overflow:auto;overflow-anchor:none}.row{height:320px}</style><div id="busy-list"><div class="row" id="a">Yesterday</div><div class="row" id="b">Yesterday</div><div class="row" id="c">Yesterday</div><div class="row" id="d">Yesterday</div><div style="height:300px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#busy-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.hits.length,4);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:3}))).found,true);
+  // Every scroll during navigation produces continued visible mutations and
+  // small geometry jitter, but leaves the exact matching label mounted.
+  await page.evaluate(()=>{
+    const el=document.querySelector("#busy-list"),node=document.createElement("div");
+    node.style.cssText="position:sticky;bottom:0;height:16px";el.append(node);
+    let timer,n=0;
+    el.addEventListener("scroll",()=>{if(timer)return;timer=setInterval(()=>{
+      node.textContent="tick "+(++n);
+      el.scrollTop+=n%2?1:-1;
+    },50);});
+    globalThis.__stopBusy=()=>clearInterval(timer);
+  });
+  const before=Date.now(),back=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
+  assert.equal(back.outcome,"verified");
+  assert.equal(back.method,"direct");
+  assert.ok(Date.now()-before<3000,"exact visible target must not wait for whole-page quiet");
+  await page.evaluate(()=>globalThis.__stopBusy());
+  const pos=await page.locator("#busy-list").evaluate(el=>el.scrollTop);
+  const repeated=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
+  assert.equal(repeated.method,"visible");
+  assert.equal(await page.locator("#busy-list").evaluate(el=>el.scrollTop),pos);
+  console.log(name+": passed exact backward navigation despite busy viewport, repeated visible click without scroll");
 }
 
 async function popupSizing(page,name) {
