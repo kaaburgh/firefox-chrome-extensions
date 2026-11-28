@@ -288,7 +288,7 @@
     if (!job) return "";
     return [
       "Virtual Page Find diagnostic log v2",
-      "Extension: 0.2.18",
+      "Extension: 0.2.19",
       "Started UTC: "+job.startedUTC,
       "Status: "+job.status+"; pace: "+job.pace+"; matches: "+job.idx.items.length,
       ...(job.droppedLogs ? ["Earlier records discarded: "+job.droppedLogs] : []),
@@ -337,7 +337,7 @@
       const changesBefore=j.layoutChanges;
       j.reachedEnd=false;
       j.phase=j.pass===2?"Rechecking top":"Finding top"; log(j,"finding-top",{pass:j.pass});
-      let stable=0, rejected=0;
+      let stable=0;
       for (let attempt=0; attempt<10 && alive() && stable<2; attempt++) {
         const oldMax=max(el), from=top(el);
         move(el,0); const immediate=top(el);
@@ -345,10 +345,8 @@
         const actual=top(el), range=max(el);
         stable = actual<=2 && Math.abs(range-oldMax)<=2 ? stable+1 : 0;
         log(j,"top-check",{attempt:attempt+1,stable,from:Math.round(from),target:0,immediate:Math.round(immediate),actual:Math.round(actual),oldRange:Math.round(oldMax),range:Math.round(range)});
-        // A virtualizer can reject a large jump and keep us at the bottom.
-        // Do not repeatedly issue the same command when it is not working.
-        rejected=actual>2 && actual>=range-2 ? rejected+1 : 0;
-        if(rejected>=2)break;
+        // Allow transient bottom resets to recover within the original
+        // ten-attempt budget; never enter a separate upward retry loop.
       }
       if (stable<2 && alive()) {
         note(j,"Could not establish a stable top; earlier content may be missing.");
@@ -589,10 +587,10 @@
     if(y===null || y<top(j.root)+v.top-origin-40 || y>top(j.root)+v.bottom-origin+40)return false;
     return inspectPosition(j,hit)==="verified";
   }
-  async function confirmVisible(j,hit,s) {
+  async function confirmVisible(j,hit,s,duration=160) {
     if(!s.alive() || !anchoredVisible(j,hit))return false;
     const begin=performance.now();
-    while(performance.now()-begin<160){
+    while(performance.now()-begin<duration){
       await pause(55);
       if(!s.alive() || !anchoredVisible(j,hit))return false;
     }
@@ -607,10 +605,13 @@
     log(j,"jump-relative-start",{index:index+1,source:source.index+1,from:Math.round(top(root)),direction});
     let stalls=0;
     const minimum=j.pace==="normal"?300:waits[j.pace];
+    // Preserve the original minimum observation time after the final
+    // move; only intermediate steps benefit from shorter waits.
+    const confirmation=Math.max(160,waits[j.pace]-minimum);
     for(let attempt=0;attempt<20 && s.alive() && performance.now()-started<12000;attempt++){
       const current=top(root), v=viewport(root);
       if(v.height<1)return "not-found";
-      if(await confirmVisible(j,hit,s))return "verified";
+      if(await confirmVisible(j,hit,s,confirmation))return "verified";
       const mounted=locateMounted(j,hit);
       const step=Math.max(1,Math.floor(v.height*0.65));
       // Once the correct record mounts, use its current geometry, even if
@@ -624,7 +625,7 @@
       const state=await s.settle(minimum,hit);
       const actual=top(root);
       const exact=s.alive() && inspectPosition(j,hit)==="verified" &&
-        ((minimum===waits[j.pace] && state!=="interrupted") || await confirmVisible(j,hit,s));
+        ((minimum===waits[j.pace] && state!=="interrupted") || await confirmVisible(j,hit,s,confirmation));
       log(j,"jump-relative",{index:index+1,source:source.index+1,from:Math.round(current),target:Math.round(target),actual:Math.round(actual),settleState:state,outcome:exact?"verified":"not-found"});
       if(exact)return "verified";
       // Layout changes can shift the numerical scroll offset backwards;

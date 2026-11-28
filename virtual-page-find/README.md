@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.18)
+# Virtual Page Find (0.2.19)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -93,3 +93,5 @@ Version 0.2.16: when two direct attempts to establish the top settle at the bott
 Version 0.2.17 simplifies navigation after signed-in Firefox measurements: remove speculative offset and range-delta jumps; prefer bounded record-relative navigation (12 viewports, 20 steps/12 seconds, either direction), including distant mounted targets, when the source remains verified. Normal relative steps wait at least 300 ms and retain the quiet window and extra final visibility confirmation. Direct correction requires current mounted geometry. Replay can correct one clipped exact target rather than accept it as approximate. Scanning retains the early bottom-reset detection, not the unsuccessful minute-long upward recovery. Live Berlin adds first/third, first/last and first/fourth transitions.
 
 Version 0.2.18 preserves the direct fast path for distant mounted targets until an anchored target has actually been observed unmounted during navigation. A timed-out relative step falls back immediately instead of consuming the entire relative budget on a busy viewport. This retains the original busy-viewport regression test unchanged.
+
+Version 0.2.19 addresses final review: restore the original ten direct top attempts per scan pass while retaining partial status on persistent bottom resets (no upward recovery loop). Keep 300 ms Normal relative steps, but observe a visible final target for at least the remaining original 550 ms minimum after the last move. Add transient/persistent bottom-reset fixtures and a delayed 520 ms target reflow regression with an independent visibility check. First-jump optimization is tracked separately in #5; live timing remains diagnostic rather than a hard performance threshold.

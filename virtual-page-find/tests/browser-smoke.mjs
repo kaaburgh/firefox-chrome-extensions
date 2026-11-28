@@ -67,6 +67,7 @@ async function test(name, browserType) {
     await identityReviewRegression(page,name);
     await navigationOptimizationRegression(page,name);
     await topRecoveryRegression(page,name);
+    await lateRelativeReflowRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -489,7 +490,7 @@ async function clickDiagnosticsRegression(page,name) {
   await page.evaluate(()=>{setTimeout(()=>{document.querySelector("#private-scroll-container").scrollTop=0;},250);});
   await page.waitForTimeout(1400);
   const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
-  assert.ok(log.includes("Extension: 0.2.18"));
+  assert.ok(log.includes("Extension: 0.2.19"));
   assert.match(log,/nav-environment [^\n]*browser=/);
   assert.match(log,/nav-click-start index=2 [^\n]*click=1/);
   assert.match(log,/nav-click-start index=1 previous=2 [^\n]*click=2/);
@@ -684,22 +685,69 @@ async function navigationOptimizationRegression(page,name) {
 }
 
 async function topRecoveryRegression(page,name) {
-  await page.setContent('<div id="top-recovery" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div data-item-id="first" style="height:40px">Yesterday</div><div style="height:1600px"></div><div data-item-id="last" style="height:40px">Yesterday</div></div>');
-  await page.evaluate(()=>{
-    const el=document.querySelector("#top-recovery");el.scrollTop=el.scrollHeight;
-    el.addEventListener("scroll",()=>{if(el.scrollTop<el.scrollHeight-el.clientHeight)el.scrollTop=el.scrollHeight;});
-  });
-  await page.waitForTimeout(100);
-  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#top-recovery").id);
-  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  async function setup(rejections) {
+    await page.setContent('<div id="top-recovery" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div data-item-id="first" style="height:40px">Yesterday</div><div style="height:1600px"></div><div data-item-id="last" style="height:40px">Yesterday</div></div>');
+    await page.evaluate(rejections=>{
+      const el=document.querySelector("#top-recovery");el.scrollTop=el.scrollHeight;
+      let remaining=rejections;
+      el.addEventListener("scroll",()=>{
+        if(el.scrollTop<=2&&remaining>0){remaining--;el.scrollTop=el.scrollHeight;}
+      });
+    },rejections);
+    await page.waitForTimeout(100);
+    const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#top-recovery").id);
+    await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+    await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+    return {state:await page.evaluate(()=>window.__virtualPageFindV1.snapshot()),log:await page.evaluate(()=>window.__virtualPageFindV1.diagnostics())};
+  }
+  // Transient bottom resets must not consume the whole retry budget.
+  const recovered=await setup(4);
+  assert.equal(recovered.state.status,"traversed",recovered.log);
+  assert.equal(recovered.state.hits.length,2);
+  assert.match(recovered.log,/top-check attempt=5 /);
+  assert.match(recovered.log,/finished [^\n]*reachedEnd=true/);
+  // Persistent bottom resets are still bounded and never a complete scan.
+  const failed=await setup(100);
+  assert.equal(failed.state.status,"partial");assert.equal(failed.state.hits.length,0);
+  assert.match(failed.log,/finished [^\n]*reachedEnd=false/);
+  assert.equal((failed.log.match(/top-check /g)||[]).length,20);
+  assert.doesNotMatch(failed.log,/top-recovery-step /);
+  console.log(name+": passed transient top recovery and bounded persistent bottom-reset failure");
+}
+
+async function lateRelativeReflowRegression(page,name) {
+  await page.setContent('<div id="late-list" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div style="position:relative;height:1000px"><div data-item-id="source" style="position:absolute;top:60px;height:40px">Yesterday</div><div data-item-id="target" style="position:absolute;top:300px;height:40px">Yesterday</div></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#late-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"normal"}),id);
   await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
-  const state=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
-  const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
-  assert.equal(state.status,"partial");assert.equal(state.hits.length,0);
-  assert.match(log,/finished [^\n]*reachedEnd=false/);
-  assert.equal((log.match(/top-check /g)||[]).length,4);
-  assert.doesNotMatch(log,/top-recovery-step /);
-  console.log(name+": passed bounded failure on bottom reset without minute-long recovery");
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.snapshot())).hits.length,2);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}))).outcome,"verified");
+  await page.evaluate(()=>{
+    const el=document.querySelector("#late-list"),row=el.querySelector('[data-item-id="target"]'),space=row.parentElement;
+    row.remove();
+    globalThis.__lateReflowDone=false;
+    el.addEventListener("scroll",()=>{
+      if(row.isConnected || el.scrollTop<100)return;
+      space.append(row);
+      setTimeout(()=>{row.style.top="700px";globalThis.__lateReflowDone=true;},520);
+    });
+  });
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
+  assert.equal(result.outcome,"verified");
+  assert.equal(result.method,"relative");
+  // Independent DOM oracle: the delayed reflow already happened when
+  // the operation returned, and the actual target remains fully visible.
+  const visible=()=>page.evaluate(()=>{
+    const el=document.querySelector("#late-list"),row=el.querySelector('[data-item-id="target"]');
+    if(!row||!globalThis.__lateReflowDone)return false;
+    const range=document.createRange();range.selectNodeContents(row);
+    const a=el.getBoundingClientRect(),b=range.getBoundingClientRect();
+    return b.top>=a.top&&b.bottom<=a.bottom;
+  });
+  assert.equal(await visible(),true,"Navigation returned before the delayed reflow settled");
+  await page.waitForTimeout(600);
+  assert.equal(await visible(),true);
+  console.log(name+": passed delayed relative-target reflow without false verification or replay");
 }
 
 async function popupSizing(page,name) {
