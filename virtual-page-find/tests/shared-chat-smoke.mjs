@@ -213,6 +213,62 @@ try {
           if(m)console.log(line.slice(0,line.length-m[1].length)+m[1].split(" ").filter(token=>allowed.test(token)).join(" "));
         }
         if(v.cancel||v.checked!==v.total||v.verified!==v.total||v.notFound)process.exitCode=1;
+        if(timezone==="Europe/Berlin" && oracleOK && v.verified===v.total){
+          stage="individual navigation";
+          // Exercise actual popup-style individual jump calls, not the
+          // verification batch's forward-only shared replay cursor.
+          for(const ordinal of [5,3,3]){
+            const index=scan.ordinals.indexOf(ordinal);
+            const trace=await page.evaluate(async ({index,ordinal,oracleMinutes})=>{
+              const engine=globalThis.__virtualPageFindV1;
+              const targetMinutes=oracleMinutes[ordinal-1];
+              function visible(){
+                for(const label of document.querySelectorAll("[role][aria-label]")){
+                  const t=(label.textContent||"").trim();
+                  if(t.length>160)continue;
+                  const m=t.match(/^yesterday\s*(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+                  if(!m || (Number(m[1])%12+(m[3].toUpperCase()==="PM"?12:0))*60+Number(m[2])!==targetMinutes)continue;
+                  const range=document.createRange();range.selectNodeContents(label);
+                  for(const rect of range.getClientRects()){
+                    if(rect.width<=0||rect.height<=0||rect.bottom<=0||rect.top>=innerHeight||rect.right<=0||rect.left>=innerWidth)continue;
+                    let top=0,bottom=innerHeight,left=0,right=innerWidth;
+                    for(let p=label;p;p=p.parentElement){
+                      const s=getComputedStyle(p),r=p.getBoundingClientRect();
+                      if(/auto|scroll|hidden|clip|overlay/.test(s.overflowY)){top=Math.max(top,r.top+p.clientTop);bottom=Math.min(bottom,r.top+p.clientTop+p.clientHeight);}
+                      if(/auto|scroll|hidden|clip|overlay/.test(s.overflowX)){left=Math.max(left,r.left+p.clientLeft);right=Math.min(right,r.left+p.clientLeft+p.clientWidth);}
+                    }
+                    if(rect.bottom>top&&rect.top<bottom&&rect.right>left&&rect.left<right)return true;
+                  }
+                }
+                return false;
+              }
+              const started=performance.now(),before=engine.snapshot().position,visibleBefore=visible();
+              let seen=visibleBefore,lostAfterSeen=false,returnedToTopAfterSeen=false,firstSeenMs=visibleBefore?0:null,samples=0;
+              function sample(){
+                samples++;
+                const now=visible(),pos=engine.snapshot().position;
+                if(now&&!seen){seen=true;firstSeenMs=Math.round(performance.now()-started);}
+                if(seen&&!now)lostAfterSeen=true;
+                if(seen&&pos<=2&&before>2)returnedToTopAfterSeen=true;
+              }
+              const timer=setInterval(sample,80);
+              try{
+                const result=await engine.jump({index});
+                sample();
+                const log=engine.diagnostics().split("\n");
+                const direct=log.filter(l=>l.includes(" jump-direct index="+(index+1)+" ")).at(-1)||"";
+                const final=log.filter(l=>l.includes(" jump index="+(index+1)+" ")).at(-1)||"";
+                const number=(line,key)=>Number(line.match(new RegExp("\\b"+key+"=(-?\\d+)"))?.[1]??-1);
+                return {ordinal,before,after:engine.snapshot().position,visibleBefore,visibleAfter:visible(),seen,lostAfterSeen,returnedToTopAfterSeen,firstSeenMs,samples,elapsedMs:Math.round(performance.now()-started),outcome:result.outcome,
+                  direct:direct?{target:number(direct,"target"),actual:number(direct,"actual"),settled:direct.includes("settled=true"),outcome:direct.match(/outcome=(verified|approximate|not-found)/)?.[1]||"unknown"}:null,
+                  method:final.match(/method=(direct|replay|visible|local)/)?.[1]||"unknown"};
+              }finally{clearInterval(timer);}
+            },{index,ordinal,oracleMinutes});
+            console.log("shared-chat: individual jump "+JSON.stringify(trace));
+            if(trace.outcome!=="verified"||!trace.visibleAfter)process.exitCode=1;
+          }
+        }
+
       }
     }
   }
