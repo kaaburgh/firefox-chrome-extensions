@@ -76,6 +76,19 @@ try {
                 if(turns.length)records.turns=Math.min(turns.length,20);
                 const numbered=turns.filter(e=>/^conversation-turn-\d+$/.test(e.getAttribute("data-testid")||"")).length;
                 if(numbered)records.numberedTurns=Math.min(numbered,20);
+                const turn=p.querySelectorAll("[data-turn-id]");
+                if(turn.length===1){
+                  const node=turn[0],value=node.getAttribute("data-turn-id");
+                  let depth=0;for(let q=node;q&&q!==p;q=q.parentElement)depth++;
+                  records.turnDepth=depth;
+                  records.valuePresent=!!value;
+                  records.uniqueValue=!!value&&document.querySelectorAll('[data-turn-id="'+CSS.escape(value)+'"]').length===1;
+                  let a=node,b=node;
+                  while(a.parentElement && a.parentElement!==p)a=a.parentElement;
+                  b=w.currentNode.parentElement;
+                  while(b.parentElement && b.parentElement!==p)b=b.parentElement;
+                  records.separateBranch=a!==b;
+                }
               }
               chain.push({tag:tags.has(p.localName)?p.localName:"other",attrs:present,kind,records});
             }
@@ -83,8 +96,11 @@ try {
           }
         };
         const buckets=new Map();
+        let scroller=document.scrollingElement||document.documentElement;
+        const onScroll=e=>{if(e.target instanceof Element)scroller=e.target;};
+        document.addEventListener("scroll",onScroll,true);
         const observer=new MutationObserver(records=>{
-          const root=document.scrollingElement||document.documentElement;
+          const root=scroller;
           const pos=Math.round(root.scrollTop/50)*50;
           if(!buckets.has(pos)&&buckets.size>=200)return;
           const b=buckets.get(pos)||{top:pos,records:0,visible:0,hidden:0,svg:0,characterData:0,childList:0,textChanging:0,emptyChanging:0};
@@ -106,7 +122,7 @@ try {
         });
         observer.observe(document.documentElement,{childList:true,characterData:true,subtree:true});
         const timer=setInterval(inspect,200);inspect();
-        globalThis.__vpfLiveProbe=()=>{clearInterval(timer);observer.disconnect();return {shapes:[...shapes].map(s=>JSON.parse(s)),busyViews:[...buckets.values()].sort((a,b)=>b.records-a.records).slice(0,5)};};
+        globalThis.__vpfLiveProbe=()=>{clearInterval(timer);observer.disconnect();document.removeEventListener("scroll",onScroll,true);return {shapes:[...shapes].map(s=>JSON.parse(s)),busyViews:[...buckets.values()].sort((a,b)=>b.records-a.records).slice(0,5)};};
       },query);
       await page.evaluate(({id,query})=>globalThis.__virtualPageFindV1.start({id,query,pace:"normal",rescan:true}),{id:candidate.id,query});
       await page.waitForFunction(()=>globalThis.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:190000});
@@ -137,7 +153,7 @@ try {
         ["Scan error (details omitted)","scan-error"]
       ]);
       const scanEvents=/^\d+ms (?:start|finding-top|top-check|scanning|range-change|view|scroll|settle|bottom-check|final-view|rescan-start|rescan-finished|restore|finished) (.*)$/;
-      const scanField=/^(?:step|steps|pass|passes|top|rawTop|range|oldRange|height|viewHeight|newHits|totalHits|hits|anchoredHits|layoutChanges|finalLayoutChanges|from|to|target|actual|requested|attempt|stable|mutations|waitMs|collectMs|firstHits|firstWarnings|changes|minimumWait)=-?\d+$|^(?:reachedEnd|firstReachedEnd|manual|reverse)=(?:true|false)$|^reason=(?:quiet|timeout|interrupted)$|^status=(?:partial|traversed|layout-uncertain)$|^pace=(?:fast|normal|slow)$/;
+      const scanField=/^(?:step|steps|pass|passes|top|rawTop|range|oldRange|height|viewHeight|newHits|totalHits|hits|anchoredHits|layoutChanges|finalLayoutChanges|from|to|target|actual|requested|attempt|stable|mutations|ignoredMutations|waitMs|collectMs|firstHits|firstWarnings|changes|minimumWait)=-?\d+$|^(?:reachedEnd|firstReachedEnd|manual|reverse)=(?:true|false)$|^reason=(?:quiet|timeout|interrupted)$|^status=(?:partial|traversed|layout-uncertain)$|^pace=(?:fast|normal|slow)$/;
       for(const line of scanLog.split("\n")){
         const warning=line.match(/^(\d+ms warning) reason=(.*)$/);
         if(warning){console.log(warning[1]+" code="+(safeReasons.get(warning[2])||"other"));continue;}

@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.5)
+# Virtual Page Find (0.2.6)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -59,3 +59,5 @@ Version 0.2.3 permits the bounded second pass to recover transient first-pass sc
 Version 0.2.4 increases the bounded per-view settling timeout to 4 seconds in both scanning and navigation. The minimum wait and 160 ms quiet condition are unchanged; continuously changing views still produce a warning or unsuccessful navigation. Live CI now counts nearby application record attributes, without logging their values, to investigate safe sibling-record anchors. The 2-second asynchronous-rendering regression preserves the existing quiet-window requirement.
 
 Version 0.2.5 adds a conservative sibling anchor for a date/label next to a unique data-turn-id element in the same local wrapper: exactly one turn record, separate branches, maximum three levels to the record, and another record in the wrapper's parent. Ambiguous wrappers remain unanchored. This uses a real observed shared-chat structure, not a site URL check. Replay can continue through a DOM-busy but geometrically quiet view; the scan still retains its timeout warning. Anchored replay is not stopped by the old numeric match coordinate. The live test records bounded mutation-type/visibility counts at the busiest positions, never page text or IDs.
+
+Version 0.2.6 allows a bounded ancestor search for a sibling turn record (eight levels from text, six from wrapper to record), while preserving the single-record/local-wrapper and uniqueness checks. Settling now distinguishes mutations whose target and rendered contents lie outside the selected viewport from visible or uncertain changes. Geometry stability remains required; no-box targets remain relevant unless display:none or disconnected. The diagnostic counts ignored mutation records, and the browser test covers offscreen animation as well as previously tested visible asynchronous text updates.

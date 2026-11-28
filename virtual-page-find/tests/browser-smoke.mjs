@@ -57,6 +57,7 @@ async function test(name, browserType) {
     await navigationRegressions(page,name);
     await replayNavigationRegression(page,name);
     await siblingAnchorRegression(page,name);
+    await offscreenMutationRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -294,7 +295,7 @@ async function replayNavigationRegression(page,name) {
 async function siblingAnchorRegression(page,name) {
   await page.setContent(`<!doctype html><style>#siblings{height:220px;width:500px;overflow:auto;overflow-anchor:none}.turn{height:280px}.stamp{display:block}</style>
     <div id="siblings">
-      <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="turn-a">A</article></div>
+      <div class="turn"><div class="stamp"><span style="display:block"><span>Yesterday</span></span></div><div><div><article data-turn-id="turn-a">A</article></div></div></div>
       <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="turn-b">B</article></div>
       <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="turn-c">C</article></div>
       <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="ambiguous-a">D</article><article data-turn-id="ambiguous-b">E</article></div>
@@ -305,7 +306,7 @@ async function siblingAnchorRegression(page,name) {
   const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
   assert.equal(s.hits.length,4);
   assert.deepEqual(s.hits.map(h=>h.anchor?.value),["turn-a","turn-b","turn-c",undefined]);
-  assert.ok(s.hits.slice(0,3).every(h=>h.anchor.up===1));
+  assert.deepEqual(s.hits.slice(0,3).map(h=>h.anchor.up),[3,1,1]);
   // Move two matching labels and verify their corresponding turn identity.
   await page.evaluate(()=>{document.querySelector(".turn").style.height="650px";});
   const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
@@ -319,6 +320,22 @@ async function siblingAnchorRegression(page,name) {
   const wrong=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
   assert.equal(wrong.found,false);
   console.log(name+": passed unique sibling turn anchors, changed geometry and rejection of ambiguous or replaced turn identity");
+}
+
+async function offscreenMutationRegression(page,name) {
+  await page.setContent(`<!doctype html><style>#animated{height:200px;width:400px;overflow:auto}#outside{height:40px}</style>
+    <div id="animated"><div>Yesterday first</div><div style="height:650px"></div><div id="outside">tick</div><div style="height:650px"></div><div>Yesterday last</div></div>
+    <script>(()=>{const el=document.querySelector("#animated"),node=document.querySelector("#outside");let timer,n=0;
+      el.addEventListener("scroll",()=>{if(!timer&&el.scrollTop>0&&el.scrollTop<350){timer=setInterval(()=>node.textContent="tick "+(++n),50);}
+      if(el.scrollTop>350&&timer){clearInterval(timer);timer=0;}});})();</script>`);
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#animated").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.status,"traversed",s.notes.join("; "));
+  assert.equal(s.hits.length,2);
+  assert.match(await page.evaluate(()=>window.__virtualPageFindV1.diagnostics()),/ignoredMutations=[1-9]\d*/);
+  console.log(name+": passed offscreen text mutation settling without suppressing visible updates");
 }
 
 async function popupSizing(page,name) {

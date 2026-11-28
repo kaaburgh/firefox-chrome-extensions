@@ -42,6 +42,37 @@
     }
     return {...r, height: Math.max(0,r.bottom-r.top), width: Math.max(0,r.right-r.left)};
   }
+  // A mutation outside the rendered viewport is not a reason to wait for
+  // unrelated animation forever. Check both target box and content range;
+  // uncertain/no-box connected targets remain relevant unless display:none.
+  // Scroll offset and total range are still checked independently.
+  function mutationTouchesView(el,records) {
+    if(!el.isConnected || records.length>200)return true;
+    const v=viewport(el), seen=new Set(), range=document.createRange();
+    if(v.height<1 || v.width<1)return true;
+    for(const r of records){
+      const target=r.target.nodeType===1?r.target:r.target.parentElement;
+      if(!target)return true;
+      if(seen.has(target))continue;
+      seen.add(target);
+      if(!target.isConnected)continue; // removal itself is reported at the parent
+      const rect=target.getBoundingClientRect();
+      if(rect.width>0 && rect.height>0 && intersect(rect,v))return true;
+      try{
+        range.selectNodeContents(target);
+        const content=range.getBoundingClientRect();
+        if(content.width>0 && content.height>0 && intersect(content,v))return true;
+        if((rect.width>0 && rect.height>0)||(content.width>0 && content.height>0))continue;
+        let hidden=false;
+        for(let p=target;p;p=p.parentElement){
+          if(getComputedStyle(p).display==="none"){hidden=true;break;}
+          if(p===el)break;
+        }
+        if(!hidden)return true;
+      }catch{return true;}
+    }
+    return false;
+  }
   function discover() {
     const root = rootElement(), list = [root];
     for (const el of document.querySelectorAll("body *")) {
@@ -104,19 +135,25 @@
     // a turn element. Only accept a tightly scoped sibling association:
     // one record in the wrapper, distinct child branches, and other
     // records in the wrapper's parent (not a single shared list header).
-    const wrapper=matchBlock.parentElement, attr="data-turn-id";
-    if(!wrapper || wrapper===root || !wrapper.parentElement || !wrapper.contains(last))return null;
-    const records=wrapper.querySelectorAll("["+attr+"]");
-    if(records.length!==1 || wrapper.parentElement.querySelectorAll("["+attr+"]").length<2)return null;
-    const record=records[0], value=record.getAttribute(attr);
-    if(!value || value.length>256 || record.contains(first) || record.contains(last))return null;
-    const key=JSON.stringify([attr,value]);
-    if(!cache.has(key))cache.set(key,anchorElement(root,attr,value));
-    if(cache.get(key)!==record)return null;
-    const recordPath=pathTo(wrapper,record), a=pathTo(wrapper,first), b=pathTo(wrapper,last);
-    if(!recordPath?.length || recordPath.length>3 || !a?.length || !b?.length ||
-       a[0]===recordPath[0] || b[0]===recordPath[0])return null;
-    return {attr,value,a,b,start,end,up:recordPath.length};
+    const attr="data-turn-id";
+    // CSS block boundaries vary across timestamp markup. Walk a short
+    // ancestor chain, stopping at the first container with multiple turns.
+    for(let wrapper=first.parentElement,depth=0;wrapper && wrapper!==root && depth<8;wrapper=wrapper.parentElement,depth++){
+      if(!wrapper.parentElement || !wrapper.contains(last))continue;
+      const records=wrapper.querySelectorAll("["+attr+"]");
+      if(records.length>1)break;
+      if(records.length!==1 || wrapper.parentElement.querySelectorAll("["+attr+"]").length<2)continue;
+      const record=records[0], value=record.getAttribute(attr);
+      if(!value || value.length>256 || record.contains(first) || record.contains(last))continue;
+      const key=JSON.stringify([attr,value]);
+      if(!cache.has(key))cache.set(key,anchorElement(root,attr,value));
+      if(cache.get(key)!==record)continue;
+      const recordPath=pathTo(wrapper,record), a=pathTo(wrapper,first), b=pathTo(wrapper,last);
+      if(!recordPath?.length || recordPath.length>6 || !a?.length || !b?.length ||
+         a[0]===recordPath[0] || b[0]===recordPath[0])continue;
+      return {attr,value,a,b,start,end,up:recordPath.length};
+    }
+    return null;
   }
   function collect(el, query, sensitive, onHit, identities) {
     const v = viewport(el);
@@ -260,7 +297,7 @@
   }
   async function run(j) {
     const el = j.root;
-    let lastMutation = performance.now(), observer, mutations=0;
+    let lastMutation = performance.now(), observer, mutations=0, ignoredMutations=0;
     log(j,"start",{pace:j.pace,minimumWait:waits[j.pace],rawTop:Math.round(el.scrollTop),top:Math.round(top(el)),range:Math.round(max(el)),viewHeight:Math.round(viewport(el).height),reverse:reversed(el)});
     const inputEvents = ["wheel","touchstart","pointerdown","keydown"];
     const interrupt = e => {
@@ -272,9 +309,9 @@
     const alive = () => !j.cancel && el.isConnected && performance.now()-j.started < LIMIT.ms && j.steps < LIMIT.steps;
     async function settle(minimum=waits[j.pace]) {
       const start = performance.now();
-      const initialMutations=mutations;
+      const initialMutations=mutations, initialIgnored=ignoredMutations;
       let lastChange = start, prev = [top(el),max(el)];
-      const record=reason=>log(j,"settle",{reason,waitMs:Math.round(performance.now()-start),mutations:mutations-initialMutations,top:Math.round(top(el)),range:Math.round(max(el))});
+      const record=reason=>log(j,"settle",{reason,waitMs:Math.round(performance.now()-start),mutations:mutations-initialMutations,ignoredMutations:ignoredMutations-initialIgnored,top:Math.round(top(el)),range:Math.round(max(el))});
       while (alive()) {
         await pause(50);
         const now = performance.now(), current = [top(el),max(el)];
@@ -285,7 +322,11 @@
       record("interrupted");
     }
     try {
-      observer = new MutationObserver(records=>{lastMutation=performance.now(); mutations+=records.length;});
+      observer = new MutationObserver(records=>{
+        mutations+=records.length;
+        if(mutationTouchesView(el,records))lastMutation=performance.now();
+        else ignoredMutations+=records.length;
+      });
       observer.observe(isDocument(el) ? document.documentElement : el,{childList:true,subtree:true,characterData:true});
       for (const type of inputEvents) window.addEventListener(type,interrupt,{capture:true,passive:true});
       async function scanPass() {
@@ -430,7 +471,7 @@
   function navigationSession(j, cancelled) {
     const root=j.root, started=performance.now();
     let lastMutation=started;
-    const observer=new MutationObserver(()=>{lastMutation=performance.now();});
+    const observer=new MutationObserver(records=>{if(mutationTouchesView(root,records))lastMutation=performance.now();});
     observer.observe(isDocument(root)?document.documentElement:root,{childList:true,subtree:true,characterData:true});
     const session={replay:false,steps:0,close:()=>observer.disconnect()};
     session.alive=()=>!cancelled() && root.isConnected && session.steps<LIMIT.steps && performance.now()-started<LIMIT.ms;
