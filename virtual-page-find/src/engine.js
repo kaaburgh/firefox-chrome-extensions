@@ -529,25 +529,41 @@
     return true;
   }
   async function localTo(j,hit,index,s) {
-    // A limited bidirectional recovery around the current viewport. It
-    // never treats a nearby equal string as the requested occurrence.
+    // A short bidirectional probe from the direct landing position.
+    // When the target coordinate was reached but identity was not, explore
+    // the adjacent viewports instead of assuming the coordinate is correct.
     if(!hit.anchorKey)return "not-found";
-    const root=j.root;
-    for(let attempt=0;attempt<4 && s.alive();attempt++){
-      const current=top(root), height=viewport(root).height;
-      if(height<1)return "not-found";
+    const root=j.root, base=top(root), height=viewport(root).height;
+    if(height<1)return "not-found";
+    const step=Math.max(1,Math.floor(height*0.65));
+    const initialMounted=locateMounted(j,hit);
+    const initialWanted=Math.max(0,(initialMounted??hit.y)-height*0.35);
+    if(initialMounted===null && Math.abs(initialWanted-base)>height*4)return "not-found";
+    const direction=initialWanted-base>height*0.25?1:-1;
+    // Visit one viewport in the preferred direction, then return through
+    // the landing viewport and probe the other side. Cap every move to
+    // an overlapping viewport, even when the virtualizer shifts geometry.
+    const probes=[base+direction*step,base,base-direction*step,base-2*direction*step];
+    const visited=[];
+    for(let attempt=0;attempt<probes.length && s.alive();attempt++){
+      const current=top(root), v=viewport(root);
+      if(v.height<1)return "not-found";
       const mounted=locateMounted(j,hit);
-      const wanted=Math.max(0,(mounted??hit.y)-height*0.35);
-      const delta=wanted-current;
-      if(Math.abs(delta)<=2 || (mounted===null && Math.abs(delta)>height*4))break;
-      const target=current+Math.sign(delta)*Math.min(Math.abs(delta),Math.floor(height*0.65));
+      const wanted=mounted===null?probes[attempt]:Math.max(0,mounted-v.height*0.35);
+      // When a mounted element still fails verification at its nominal
+      // coordinate, keep probing instead of attempting a zero-distance move.
+      const goal=Math.abs(wanted-current)>2?wanted:probes[attempt];
+      const delta=goal-current, cap=Math.max(1,Math.floor(v.height*0.65));
+      const target=Math.max(0,Math.min(max(root),current+Math.sign(delta)*Math.min(Math.abs(delta),cap)));
+      if(Math.abs(target-current)<=2 || visited.some(y=>Math.abs(y-target)<=2))continue;
+      visited.push(target);
       move(root,target);s.steps++;
       const state=await s.settle(waits[j.pace],hit);
       const actual=top(root);
       const exact=state!=="interrupted" && s.alive() && inspectPosition(j,hit)==="verified";
       log(j,"jump-local",{index:index+1,from:Math.round(current),target:Math.round(target),actual:Math.round(actual),settleState:state,outcome:exact?"verified":"not-found"});
-      if(exact)return "verified";
-      if(state==="interrupted" || (actual-current)*Math.sign(delta)<=0.5 || Math.abs(actual-current)>height+2)break;
+      if(exact || (s.alive() && await confirmVisible(j,hit,s)))return "verified";
+      if(state==="interrupted" || Math.abs(actual-current)>v.height+2)break;
     }
     return "not-found";
   }

@@ -59,6 +59,7 @@ async function test(name, browserType) {
     await siblingAnchorRegression(page,name);
     await offscreenMutationRegression(page,name);
     await busyNavigationRegression(page,name);
+    await localRecoveryRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -369,6 +370,37 @@ async function busyNavigationRegression(page,name) {
   assert.equal(repeated.method,"visible");
   assert.equal(await page.locator("#busy-list").evaluate(el=>el.scrollTop),pos);
   console.log(name+": passed exact backward navigation despite busy viewport, repeated visible click without scroll");
+}
+
+async function localRecoveryRegression(page,name) {
+  await page.setContent('<!doctype html><style>#local-list{height:240px;width:500px;overflow:auto;overflow-anchor:none}#before{height:1200px}.row{height:40px}</style><div id="local-list"><div id="before"></div><div id="target" class="row">Yesterday</div><div style="height:1200px"></div><div id="other" class="row">Yesterday</div><div style="height:400px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#local-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.hits.length,2);
+  // Unmount the target until a nearby backward scroll re-renders it.
+  // Its saved position is reachable, but the exact target is just above it.
+  await page.evaluate(()=>{
+    const el=document.querySelector("#local-list"),row=document.querySelector("#target");
+    const before=document.querySelector("#before");
+    row.remove();before.style.height="1040px";
+    let last=el.scrollTop;
+    el.addEventListener("scroll",()=>{
+      if(el.scrollTop<last && el.scrollTop>700 && el.scrollTop<1200 && !row.isConnected)before.after(row);
+      last=el.scrollTop;
+    });
+  });
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(result.outcome,"verified");
+  assert.equal(result.method,"local");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#local-list"),row=document.querySelector("#target");
+    const a=el.getBoundingClientRect(),b=row.getBoundingClientRect();
+    return b.bottom>a.top&&b.top<a.bottom;
+  }),true);
+  assert.match(await page.evaluate(()=>window.__virtualPageFindV1.diagnostics()),/jump-local index=1 [^\n]*outcome=verified/);
+  console.log(name+": passed nearby reverse recovery when direct landing coordinate was correct but target was not mounted");
 }
 
 async function popupSizing(page,name) {

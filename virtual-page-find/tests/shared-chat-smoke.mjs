@@ -268,6 +268,7 @@ try {
             console.log("shared-chat: individual jump "+JSON.stringify(trace));
             if(trace.outcome!=="verified"||!trace.visibleAfter)process.exitCode=1;
             if(ordinal===3 && trace.visibleBefore && trace.method!=="visible")process.exitCode=1;
+            if(ordinal===3 && trace.method==="replay")process.exitCode=1;
           }
         }
 

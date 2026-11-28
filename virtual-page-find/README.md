@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.7)
+# Virtual Page Find (0.2.8)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -67,3 +67,5 @@ Version 0.2.6 allows a bounded ancestor search for a sibling turn record (eight 
 The live test uses the six user-supplied timestamp labels of the configured reference snapshot as an ordered oracle. Both Berlin and UTC browser contexts run with English locale and a fixed November 28, 2026 browser date (normal timers remain active). The timezone hypothesis predicts all six in Berlin, and only ordinals 2–6 as Yesterday in UTC. CI reports only ordinal matches, not recovered label text, and checks all navigation identities. The separately sampled mounted labels are diagnostic evidence, not a complete independent traversal. A different snapshot requires a different oracle. `VPF_EXPECTED_COUNT`, if set, applies to the Berlin case.
 
 Version 0.2.7 distinguishes navigation from scan settling: already-visible exact matches are left in place after a short identity check, and a direct move can finish when the exact target stays visible even if unrelated DOM or scroll geometry is busy. If a direct move fails, an anchored target can be recovered through at most four local viewport steps before falling back to the existing top-to-bottom replay. Unanchored equal text is never promoted to Verified. Live Berlin CI exercises individual backward and repeated jumps (ordinals 5, 3, 3), reports timing, final visibility and replay usage, and checks a repeated visible click does not scroll. Synthetic regression exercises sustained viewport jitter and identical labels.
+
+Version 0.2.8 extends the bounded local fallback to probe adjacent overlapping viewports even when the direct landing exactly matches the stored coordinate. The real backward jump must not use full replay in the Berlin live test. A regression explicitly unmounts a target at its old location and remounts it only after a small backward move; an identically worded second result does not count as success.
