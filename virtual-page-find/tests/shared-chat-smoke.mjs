@@ -206,8 +206,8 @@ try {
         // Only allow fixed events/fields to reach public CI output, even if
         // the underlying diagnostic implementation later gains more fields.
         const log=await page.evaluate(()=>globalThis.__virtualPageFindV1.diagnostics());
-        const event=/^\d+ms (?:jump-direct|jump-replay-start|jump-replay-scroll|jump-replay-view|jump-replay-gap|jump-replay-busy|jump-local|jump|verify-finished) (.*)$/;
-        const allowed=/^(?:index|savedY|target|actual|range|from|top|checked|verified|approximate|notFound)=-?\d+$|^(?:anchored|mounted|settled|cancelled)=(?:true|false)$|^method=(?:direct|replay|visible|local)$|^settleState=(?:quiet|geometry-quiet|target-visible|interrupted)$|^outcome=(?:verified|approximate|not-found)$/;
+        const event=/^\d+ms (?:jump-direct|jump-replay-start|jump-replay-scroll|jump-replay-view|jump-replay-gap|jump-replay-busy|jump-local|jump-relative-start|jump-relative|jump|verify-finished) (.*)$/;
+        const allowed=/^(?:index|source|direction|savedY|target|actual|range|from|top|checked|verified|approximate|notFound)=-?\d+$|^(?:anchored|mounted|settled|cancelled)=(?:true|false)$|^method=(?:direct|replay|visible|local|relative)$|^settleState=(?:quiet|geometry-quiet|target-visible|interrupted)$|^outcome=(?:verified|approximate|not-found)$/;
         for(const line of log.split("\n")){
           const m=line.match(event);
           if(m)console.log(line.slice(0,line.length-m[1].length)+m[1].split(" ").filter(token=>allowed.test(token)).join(" "));
@@ -262,7 +262,7 @@ try {
                 const number=(line,key)=>Number(line.match(new RegExp("\\b"+key+"=(-?\\d+)"))?.[1]??-1);
                 return {ordinal,before,after:engine.snapshot().position,visibleBefore,visibleAfter:visible(),seen,lostAfterSeen,returnedToTopAfterSeen,firstSeenMs,samples,elapsedMs:Math.round(performance.now()-started),outcome:result.outcome,
                   direct:direct?{target:number(direct,"target"),actual:number(direct,"actual"),settled:direct.includes("settled=true"),outcome:direct.match(/outcome=(verified|approximate|not-found)/)?.[1]||"unknown"}:null,
-                  method:result.method||final.match(/method=(direct|replay|visible|local)/)?.[1]||"unknown"};
+                  method:result.method||final.match(/method=(direct|replay|visible|local|relative)/)?.[1]||"unknown"};
               }finally{clearInterval(timer);}
             },{index,ordinal,oracleMinutes});
             console.log("shared-chat: individual jump "+JSON.stringify(trace));

@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.8)
+# Virtual Page Find (0.2.9)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -69,3 +69,5 @@ The live test uses the six user-supplied timestamp labels of the configured refe
 Version 0.2.7 distinguishes navigation from scan settling: already-visible exact matches are left in place after a short identity check, and a direct move can finish when the exact target stays visible even if unrelated DOM or scroll geometry is busy. If a direct move fails, an anchored target can be recovered through at most four local viewport steps before falling back to the existing top-to-bottom replay. Unanchored equal text is never promoted to Verified. Live Berlin CI exercises individual backward and repeated jumps (ordinals 5, 3, 3), reports timing, final visibility and replay usage, and checks a repeated visible click does not scroll. Synthetic regression exercises sustained viewport jitter and identical labels.
 
 Version 0.2.8 extends the bounded local fallback to probe adjacent overlapping viewports even when the direct landing exactly matches the stored coordinate. The real backward jump must not use full replay in the Berlin live test. A regression explicitly unmounts a target at its old location and remounts it only after a small backward move; an identically worded second result does not count as success.
+
+Version 0.2.9 uses the last verified and still-visible result as a relative navigation origin when a nearby logical target is unmounted. It follows the recorded result order (including backward moves) rather than assuming stale pixel coordinates preserve that order across re-estimation. At most 14 overlapping moves or 12 seconds before the existing direct/local/full fallbacks; an exact anchor and context must still match. A regression deliberately inverts the relationship between the current source coordinate and the older target's stored coordinate. No application-specific index or network state is accessed.

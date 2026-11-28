@@ -60,6 +60,7 @@ async function test(name, browserType) {
     await offscreenMutationRegression(page,name);
     await busyNavigationRegression(page,name);
     await localRecoveryRegression(page,name);
+    await relativeRecoveryRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -401,6 +402,45 @@ async function localRecoveryRegression(page,name) {
   }),true);
   assert.match(await page.evaluate(()=>window.__virtualPageFindV1.diagnostics()),/jump-local index=1 [^\n]*outcome=verified/);
   console.log(name+": passed nearby reverse recovery when direct landing coordinate was correct but target was not mounted");
+}
+
+async function relativeRecoveryRegression(page,name) {
+  await page.setContent('<!doctype html><style>#relative-list{height:240px;width:500px;overflow:auto;overflow-anchor:none;position:relative}#before-relative{height:1200px}.row{height:40px}</style><div id="relative-list"><div id="before-relative"></div><div id="older" class="row">Yesterday</div><div style="height:800px"></div><div id="newer" class="row">Yesterday</div><div style="height:400px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#relative-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.hits.length,2);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}))).outcome,"verified");
+  // The virtualizer shrinks the estimated prefix so the current newer
+  // result now lies BEFORE the older result's saved numeric coordinate.
+  // Recreate the older row only as the user moves backwards.
+  await page.evaluate(()=>{
+    const el=document.querySelector("#relative-list"),row=document.querySelector("#older"),prefix=document.querySelector("#before-relative");
+    row.remove();prefix.style.height="300px";
+    el.scrollTop=document.querySelector("#newer").offsetTop-70;
+    let previous=el.scrollTop;
+    el.addEventListener("scroll",()=>{
+      const now=el.scrollTop;
+      if(now<previous && now<520 && !row.isConnected)prefix.after(row);
+      previous=now;
+    });
+  });
+  const initial=await page.locator("#relative-list").evaluate(el=>el.scrollTop);
+  assert.ok(initial<s.hits[0].y);
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(result.outcome,"verified");
+  assert.equal(result.method,"relative");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#relative-list"),row=document.querySelector("#older");
+    if(!row)return false;
+    const a=el.getBoundingClientRect(),b=row.getBoundingClientRect();
+    return b.bottom>a.top&&b.top<a.bottom;
+  }),true);
+  const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.match(log,/jump-relative-start index=1 source=2 [^\n]*direction=-1/);
+  assert.doesNotMatch(log,/jump-replay-start index=1 /);
+  console.log(name+": passed backwards record-relative navigation despite inverted stale coordinate direction");
 }
 
 async function popupSizing(page,name) {

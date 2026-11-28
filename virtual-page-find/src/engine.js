@@ -528,6 +528,40 @@
     }
     return true;
   }
+  // A previously verified, still-visible result is a stronger starting
+  // point than the numeric coordinate of an unmounted target. Walk in
+  // result order; the scroll range may have been re-estimated since scan.
+  async function relativeTo(j,hit,index,s,source) {
+    const root=j.root, direction=Math.sign(index-source.index), started=performance.now();
+    if(!direction)return "not-found";
+    log(j,"jump-relative-start",{index:index+1,source:source.index+1,from:Math.round(top(root)),direction});
+    let stalls=0;
+    for(let attempt=0;attempt<14 && s.alive() && performance.now()-started<12000;attempt++){
+      const current=top(root), v=viewport(root);
+      if(v.height<1)return "not-found";
+      if(await confirmVisible(j,hit,s))return "verified";
+      const mounted=locateMounted(j,hit);
+      const step=Math.max(1,Math.floor(v.height*0.65));
+      // Once the correct record mounts, use its current geometry, even if
+      // the page's estimated layout has moved it to the other side.
+      const goal=mounted===null?current+direction*step:Math.max(0,mounted-v.height*0.35);
+      let delta=goal-current;
+      if(Math.abs(delta)<=2)delta=direction*step;
+      const target=Math.max(0,Math.min(max(root),current+Math.sign(delta)*Math.min(Math.abs(delta),step)));
+      if(Math.abs(target-current)<=2)break;
+      move(root,target);s.steps++;
+      const state=await s.settle(waits[j.pace],hit);
+      const actual=top(root);
+      const exact=s.alive() && inspectPosition(j,hit)==="verified";
+      log(j,"jump-relative",{index:index+1,source:source.index+1,from:Math.round(current),target:Math.round(target),actual:Math.round(actual),settleState:state,outcome:exact?"verified":"not-found"});
+      if(exact && (state!=="interrupted" || await confirmVisible(j,hit,s)))return "verified";
+      // Layout changes can shift the numerical scroll offset backwards;
+      // only give up after consecutive moves make no usable progress.
+      stalls=Math.abs(actual-current)<=2?stalls+1:0;
+      if(stalls>=2 || !s.alive())break;
+    }
+    return "not-found";
+  }
   async function localTo(j,hit,index,s) {
     // A short bidirectional probe from the direct landing position.
     // When the target coordinate was reached but identity was not, explore
@@ -609,13 +643,23 @@
   async function navigate(j,hit,index,s) {
     const root=j.root;
     if(!root.isConnected || !hit || !Number.isFinite(hit.y) || !s.alive())return {found:false,outcome:"not-found"};
-    const mounted=locateMounted(j,hit);
-    const target=Math.max(0,(mounted ?? hit.y)-viewport(root).height*0.35);
+    let mounted=locateMounted(j,hit);
+    let target=Math.max(0,(mounted ?? hit.y)-viewport(root).height*0.35);
     let outcome="not-found", method="direct";
     // Clicking an already visible result should not move the page at all.
     if(await confirmVisible(j,hit,s)){
       method="visible";outcome="verified";
     }else if(!s.replay && s.alive()){
+      const source=j.lastVerified;
+      const height=viewport(root).height;
+      if(mounted===null && hit.anchorKey && source && source.index!==index &&
+         Math.abs(hit.y-source.hit.y)<=height*9 && anchoredVisible(j,source.hit)){
+        outcome=await relativeTo(j,hit,index,s,source);
+        if(outcome==="verified")method="relative";
+      }
+      if(outcome==="not-found" && s.alive()){
+      mounted=locateMounted(j,hit);
+      target=Math.max(0,(mounted??hit.y)-viewport(root).height*0.35);
       move(root,target);s.steps++;
       const settleState=await s.settle(Math.max(500,waits[j.pace])+160,hit);
       const settled=settleState!=="interrupted";
@@ -627,12 +671,14 @@
         outcome=await localTo(j,hit,index,s);
         if(outcome==="verified")method="local";
       }
+      }
     }
     if(outcome==="not-found" && s.alive()){
       method="replay";
       outcome=await replayTo(j,hit,index,s);
     }
     log(j,"jump",{index:index+1,savedY:hit.y,target:Math.round(target),actual:Math.round(top(root)),range:Math.round(max(root)),anchored:!!hit.anchorKey,mounted:mounted!==null,method,outcome});
+    if(outcome==="verified")j.lastVerified={index,hit};
     return {found:outcome==="verified",outcome,method};
   }
   async function jump(args) {
