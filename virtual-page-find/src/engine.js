@@ -100,7 +100,23 @@
         if(a && b) return {attr,value,a,b,start,end};
       }
     }
-    return null;
+    // Some record labels (such as timestamps) live next to, not inside,
+    // a turn element. Only accept a tightly scoped sibling association:
+    // one record in the wrapper, distinct child branches, and other
+    // records in the wrapper's parent (not a single shared list header).
+    const wrapper=matchBlock.parentElement, attr="data-turn-id";
+    if(!wrapper || wrapper===root || !wrapper.parentElement || !wrapper.contains(last))return null;
+    const records=wrapper.querySelectorAll("["+attr+"]");
+    if(records.length!==1 || wrapper.parentElement.querySelectorAll("["+attr+"]").length<2)return null;
+    const record=records[0], value=record.getAttribute(attr);
+    if(!value || value.length>256 || record.contains(first) || record.contains(last))return null;
+    const key=JSON.stringify([attr,value]);
+    if(!cache.has(key))cache.set(key,anchorElement(root,attr,value));
+    if(cache.get(key)!==record)return null;
+    const recordPath=pathTo(wrapper,record), a=pathTo(wrapper,first), b=pathTo(wrapper,last);
+    if(!recordPath?.length || recordPath.length>3 || !a?.length || !b?.length ||
+       a[0]===recordPath[0] || b[0]===recordPath[0])return null;
+    return {attr,value,a,b,start,end,up:recordPath.length};
   }
   function collect(el, query, sensitive, onHit, identities) {
     const v = viewport(el);
@@ -180,7 +196,7 @@
         const anchor=makeAnchor(base,offsets[first].node,last.node,m.start-offsets[first].start,m.end-last.start,anchorCache,groupBlock);
         if(anchor) {
           hit.anchor=anchor;
-          hit.anchorKey=JSON.stringify([anchor.attr,anchor.value,anchor.a,anchor.b,anchor.start,anchor.end,hit.match]);
+          hit.anchorKey=JSON.stringify([anchor.attr,anchor.value,anchor.up||0,anchor.a,anchor.b,anchor.start,anchor.end,hit.match]);
         }
         if (pinnedPart) {
           // Persistent sticky/fixed labels have changing coordinates but stable
@@ -394,8 +410,9 @@
     if(!hit.anchor)return null;
     const root=j.root, base=isDocument(root)?document.body||root:root;
     const {attr,value,a,b,start,end}=hit.anchor;
-    const element=anchorElement(base,attr,value);
+    let element=anchorElement(base,attr,value);
     if(!element)return null;
+    for(let i=0;i<(hit.anchor.up||0);i++){element=element.parentElement;if(!element || element===base)return null;}
     const first=atPath(element,a), last=atPath(element,b);
     if(first?.nodeType!==Node.TEXT_NODE || last?.nodeType!==Node.TEXT_NODE ||
        start>first.length || end>last.length)return null;
@@ -422,13 +439,13 @@
       let lastChange=begin, previous=[top(root),max(root)];
       while(session.alive()){
         await pause(50);
-        if(!session.alive())return false;
+        if(!session.alive())return "interrupted";
         const now=performance.now(), current=[top(root),max(root)];
         if(current[0]!==previous[0] || current[1]!==previous[1]){lastChange=now;previous=current;}
-        if(now-begin>=minimum && now-Math.max(lastMutation,lastChange)>=160)return true;
-        if(now-begin>=settleLimit(minimum))return false;
+        if(now-begin>=minimum && now-Math.max(lastMutation,lastChange)>=160)return "quiet";
+        if(now-begin>=settleLimit(minimum))return now-lastChange>=160?"geometry-quiet":"interrupted";
       }
-      return false;
+      return "interrupted";
     };
     return session;
   }
@@ -453,7 +470,7 @@
       for(let attempt=0;attempt<10 && stable<2 && s.alive();attempt++){
         const oldRange=max(root);
         move(root,0);s.steps++;
-        if(!await s.settle(Math.max(500,waits[j.pace])))return "not-found";
+        if(await s.settle(Math.max(500,waits[j.pace]))==="interrupted")return "not-found";
         stable=top(root)<=2 && Math.abs(max(root)-oldRange)<=2?stable+1:0;
       }
       if(stable<2)return "not-found";
@@ -466,10 +483,12 @@
       if(outcome!=="not-found")return outcome;
       // For unanchored hits, do not substitute a nearby occurrence; only
       // accept the same context and coordinate as during the scan.
-      if(current>hit.y+10 || current>=range-2 || height<1)return "not-found";
+      if((!hit.anchorKey && current>hit.y+10) || current>=range-2 || height<1)return "not-found";
       const target=core.nextTop(current,height,range);
       move(root,target);s.steps++;
-      if(!await s.settle())return "not-found";
+      const settled=await s.settle();
+      if(settled==="interrupted")return "not-found";
+      if(settled==="geometry-quiet")log(j,"jump-replay-busy",{index:index+1,top:Math.round(top(root)),range:Math.round(max(root))});
       const actual=top(root);
       log(j,"jump-replay-scroll",{index:index+1,from:Math.round(current),target:Math.round(target),actual:Math.round(actual),range:Math.round(max(root))});
       if(actual<=current+0.5 || actual-current>height+2){
@@ -488,7 +507,8 @@
     let outcome="not-found", method="direct";
     if(!s.replay){
       move(root,target);s.steps++;
-      const settled=await s.settle(Math.max(500,waits[j.pace])+160);
+      const settleState=await s.settle(Math.max(500,waits[j.pace])+160);
+      const settled=settleState!=="interrupted";
       if(settled && s.alive())outcome=inspectPosition(j,hit);
       log(j,"jump-direct",{index:index+1,savedY:hit.y,target:Math.round(target),actual:Math.round(top(root)),range:Math.round(max(root)),settled,outcome});
     }

@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.4)
+# Virtual Page Find (0.2.5)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -57,3 +57,5 @@ Set the repository Actions secret `VPF_SHARED_URL` to a publicly viewable `https
 Version 0.2.3 permits the bounded second pass to recover transient first-pass scrolling/settling warnings, even when the first pass stalled. The original warnings are retained in diagnostics; only a clean complete retry can replace first-pass results. Fatal inspection limits and cancellation do not trigger retries. Live CI additionally publishes allowlisted scan events, fixed warning codes and bounded ancestor-structure summaries (attribute presence only, no page text or attribute values).
 
 Version 0.2.4 increases the bounded per-view settling timeout to 4 seconds in both scanning and navigation. The minimum wait and 160 ms quiet condition are unchanged; continuously changing views still produce a warning or unsuccessful navigation. Live CI now counts nearby application record attributes, without logging their values, to investigate safe sibling-record anchors. The 2-second asynchronous-rendering regression preserves the existing quiet-window requirement.
+
+Version 0.2.5 adds a conservative sibling anchor for a date/label next to a unique data-turn-id element in the same local wrapper: exactly one turn record, separate branches, maximum three levels to the record, and another record in the wrapper's parent. Ambiguous wrappers remain unanchored. This uses a real observed shared-chat structure, not a site URL check. Replay can continue through a DOM-busy but geometrically quiet view; the scan still retains its timeout warning. Anchored replay is not stopped by the old numeric match coordinate. The live test records bounded mutation-type/visibility counts at the busiest positions, never page text or IDs.

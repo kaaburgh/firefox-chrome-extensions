@@ -82,20 +82,44 @@ try {
             if(shapes.size<24)shapes.add(JSON.stringify(chain));
           }
         };
+        const buckets=new Map();
+        const observer=new MutationObserver(records=>{
+          const root=document.scrollingElement||document.documentElement;
+          const pos=Math.round(root.scrollTop/50)*50;
+          if(!buckets.has(pos)&&buckets.size>=200)return;
+          const b=buckets.get(pos)||{top:pos,records:0,visible:0,hidden:0,svg:0,characterData:0,childList:0,textChanging:0,emptyChanging:0};
+          for(const record of records){
+            b.records++;
+            const target=record.target.nodeType===1?record.target:record.target.parentElement;
+            if(!target)continue;
+            const rect=target.getBoundingClientRect();
+            if(rect.width>0&&rect.height>0&&rect.bottom>0&&rect.top<innerHeight)b.visible++;else b.hidden++;
+            if(target.closest("svg"))b.svg++;
+            if(record.type==="characterData"){b.characterData++;b.textChanging++;}
+            else{
+              b.childList++;
+              const nodes=[...record.addedNodes,...record.removedNodes];
+              if(nodes.some(n=>(n.textContent||"").trim()))b.textChanging++;else b.emptyChanging++;
+            }
+          }
+          buckets.set(pos,b);
+        });
+        observer.observe(document.documentElement,{childList:true,characterData:true,subtree:true});
         const timer=setInterval(inspect,200);inspect();
-        globalThis.__vpfLiveProbe=()=>{clearInterval(timer);return [...shapes].map(s=>JSON.parse(s));};
+        globalThis.__vpfLiveProbe=()=>{clearInterval(timer);observer.disconnect();return {shapes:[...shapes].map(s=>JSON.parse(s)),busyViews:[...buckets.values()].sort((a,b)=>b.records-a.records).slice(0,5)};};
       },query);
       await page.evaluate(({id,query})=>globalThis.__virtualPageFindV1.start({id,query,pace:"normal",rescan:true}),{id:candidate.id,query});
       await page.waitForFunction(()=>globalThis.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:190000});
       const scan=await page.evaluate(()=>{
         const s=globalThis.__virtualPageFindV1.snapshot();
         const attrs={};
-        for(const h of s.hits){const attr=h.anchor?.attr||"none";attrs[attr]=(attrs[attr]||0)+1;}
+        for(const h of s.hits){const attr=h.anchor?.attr?(h.anchor.up?"sibling-":"")+h.anchor.attr:"none";attrs[attr]=(attrs[attr]||0)+1;}
         return {status:s.status,matches:s.hits.length,steps:s.steps,pass:s.pass,layoutChanges:s.layoutChanges,finalLayoutChanges:s.finalLayoutChanges,anchorTypes:attrs,positions:s.hits.map(h=>h.y)};
       });
       console.log("shared-chat: scan "+JSON.stringify(scan));
       const shapes=await page.evaluate(()=>globalThis.__vpfLiveProbe());
-      console.log("shared-chat: match ancestor shapes "+JSON.stringify(shapes));
+      console.log("shared-chat: match ancestor shapes "+JSON.stringify(shapes.shapes));
+      console.log("shared-chat: mutation summary "+JSON.stringify(shapes.busyViews));
       const scanLog=await page.evaluate(()=>globalThis.__virtualPageFindV1.diagnostics());
       const safeReasons=new Map([
         ["Could not establish a stable top; earlier content may be missing.","unstable-top"],
@@ -130,7 +154,7 @@ try {
         // Only allow fixed events/fields to reach public CI output, even if
         // the underlying diagnostic implementation later gains more fields.
         const log=await page.evaluate(()=>globalThis.__virtualPageFindV1.diagnostics());
-        const event=/^\d+ms (?:jump-direct|jump-replay-start|jump-replay-scroll|jump-replay-view|jump-replay-gap|jump|verify-finished) (.*)$/;
+        const event=/^\d+ms (?:jump-direct|jump-replay-start|jump-replay-scroll|jump-replay-view|jump-replay-gap|jump-replay-busy|jump|verify-finished) (.*)$/;
         const allowed=/^(?:index|savedY|target|actual|range|from|top|checked|verified|approximate|notFound)=-?\d+$|^(?:anchored|mounted|settled|cancelled)=(?:true|false)$|^method=(?:direct|replay)$|^outcome=(?:verified|approximate|not-found)$/;
         for(const line of log.split("\n")){
           const m=line.match(event);

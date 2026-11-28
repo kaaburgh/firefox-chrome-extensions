@@ -56,6 +56,7 @@ async function test(name, browserType) {
     await reviewRegressions(page, name);
     await navigationRegressions(page,name);
     await replayNavigationRegression(page,name);
+    await siblingAnchorRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -288,6 +289,36 @@ async function replayNavigationRegression(page,name) {
   assert.equal((batch.match(/jump-replay-start/g)||[]).length,1,"batch must reuse forward replay");
   assert.equal(await page.locator("#replay-list").evaluate(el=>el.scrollTop),0);
   console.log(name+": passed rejected direct jump, incremental replay to independent oracle row, and shared batch replay without false verification");
+}
+
+async function siblingAnchorRegression(page,name) {
+  await page.setContent(`<!doctype html><style>#siblings{height:220px;width:500px;overflow:auto;overflow-anchor:none}.turn{height:280px}.stamp{display:block}</style>
+    <div id="siblings">
+      <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="turn-a">A</article></div>
+      <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="turn-b">B</article></div>
+      <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="turn-c">C</article></div>
+      <div class="turn"><div class="stamp"><span>Yesterday</span></div><article data-turn-id="ambiguous-a">D</article><article data-turn-id="ambiguous-b">E</article></div>
+    </div>`);
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#siblings").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.hits.length,4);
+  assert.deepEqual(s.hits.map(h=>h.anchor?.value),["turn-a","turn-b","turn-c",undefined]);
+  assert.ok(s.hits.slice(0,3).every(h=>h.anchor.up===1));
+  // Move two matching labels and verify their corresponding turn identity.
+  await page.evaluate(()=>{document.querySelector(".turn").style.height="650px";});
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
+  assert.equal(result.found,true);
+  assert.equal(await page.evaluate(()=>{
+    const stamp=document.querySelector('[data-turn-id="turn-b"]').previousElementSibling;
+    const a=document.querySelector("#siblings").getBoundingClientRect(),b=stamp.getBoundingClientRect();
+    return b.top>=a.top&&b.bottom<=a.bottom;
+  }),true);
+  await page.evaluate(()=>{document.querySelector('[data-turn-id="turn-b"]').dataset.turnId="replacement";});
+  const wrong=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}));
+  assert.equal(wrong.found,false);
+  console.log(name+": passed unique sibling turn anchors, changed geometry and rejection of ambiguous or replaced turn identity");
 }
 
 async function popupSizing(page,name) {
