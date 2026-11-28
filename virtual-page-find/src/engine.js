@@ -288,7 +288,7 @@
     if (!job) return "";
     return [
       "Virtual Page Find diagnostic log v2",
-      "Extension: 0.2.14",
+      "Extension: 0.2.15",
       "Started UTC: "+job.startedUTC,
       "Status: "+job.status+"; pace: "+job.pace+"; matches: "+job.idx.items.length,
       ...(job.droppedLogs ? ["Earlier records discarded: "+job.droppedLogs] : []),
@@ -593,7 +593,7 @@
     if(!direction)return "not-found";
     log(j,"jump-relative-start",{index:index+1,source:source.index+1,from:Math.round(top(root)),direction});
     let stalls=0;
-    for(let attempt=0;attempt<14 && s.alive() && performance.now()-started<12000;attempt++){
+    for(let attempt=0;attempt<(direction<0?20:14) && s.alive() && performance.now()-started<12000;attempt++){
       const current=top(root), v=viewport(root);
       if(v.height<1)return "not-found";
       if(await confirmVisible(j,hit,s))return "verified";
@@ -636,14 +636,17 @@
     // an overlapping viewport, even when the virtualizer shifts geometry.
     const probes=[base+direction*step,base,base-direction*step,base-2*direction*step];
     const visited=[];
-    for(let attempt=0;attempt<probes.length && s.alive();attempt++){
+    for(let attempt=0;attempt<10 && s.alive();attempt++){
       const current=top(root), v=viewport(root);
       if(v.height<1)return "not-found";
       const mounted=locateMounted(j,hit);
+      // Beyond the original four speculative probes, continue only
+      // toward a currently mounted exact target, never into unknown space.
+      if(attempt>=probes.length && mounted===null)break;
       const wanted=mounted===null?probes[attempt]:Math.max(0,mounted-v.height*0.35);
       // When a mounted element still fails verification at its nominal
       // coordinate, keep probing instead of attempting a zero-distance move.
-      const goal=Math.abs(wanted-current)>2?wanted:probes[attempt];
+      const goal=Math.abs(wanted-current)>2?wanted:(probes[attempt]??current);
       const delta=goal-current, cap=Math.max(1,Math.floor(v.height*0.65));
       const target=Math.max(0,Math.min(max(root),current+Math.sign(delta)*Math.min(Math.abs(delta),cap)));
       if(Math.abs(target-current)<=2 || visited.some(y=>Math.abs(y-target)<=2))continue;
@@ -710,7 +713,7 @@
       const source=j.lastVerified;
       const height=viewport(root).height;
       const relativeEligible=mounted===null && !!hit.anchorKey && !!source && source.index!==index &&
-         Math.abs(hit.y-source.hit.y)<=height*9;
+         Math.abs(hit.y-source.hit.y)<=height*(index<source.index?12:9);
       const sourceVisible=relativeEligible && anchoredVisible(j,source.hit);
       // Saved distances can remain valid when the virtualizer changes
       // the height of preceding content. Only a verified visible source
@@ -746,7 +749,9 @@
       if(outcome==="not-found" && s.alive() && hit.anchorKey){
         const rangeDelta=max(root)-rangeBefore, newY=locateMounted(j,hit);
         const corrected=Math.max(0,Math.min(max(root),newY===null?target+rangeDelta:newY-viewport(root).height*0.35));
-        if((newY!==null || Math.abs(rangeDelta)>height*0.5) && Math.abs(corrected-top(root))>3){
+        // Do not repeat a long direct jump to a mounted element after
+        // the virtualizer has just rejected that kind of move.
+        if((newY!==null?Math.abs(corrected-top(root))<=height:Math.abs(rangeDelta)>height*0.5) && Math.abs(corrected-top(root))>3){
           estimate=corrected+viewport(root).height*0.35;
           log(j,"nav-correction",{index:index+1,correction:Math.round(rangeDelta),predicted:Math.round(corrected),mounted:newY!==null});
           s.move(corrected,"direct");

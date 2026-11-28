@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.14)
+# Virtual Page Find (0.2.15)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -83,3 +83,5 @@ Version 0.2.12 recognizes unique ancestor `data-content-search-turn-key` and `da
 Version 0.2.13 addresses PR review: reconcile overlapping observations of the same record when its anchor appears or text path changes at the same coordinates; do not accept a conflicting known anchor as an approximate navigation success; refresh container discovery when a popup reopened during navigation becomes idle. Existing fallback strategies remain unchanged.
 
 Version 0.2.14 experiments with two bounded navigation optimizations. For an unmounted forward target near a still-visible verified source, a nonzero observed source displacement supplies a corrected direct landing coordinate if it is inside the current scroll range. Backward targets retain the existing relative strategy. After a failed direct move, one corrective retry uses fresh mounted geometry or a substantial scroll-range delta as a hint; subsequent local recovery uses the updated estimate. Every success still requires the existing identity/visibility checks. No scan or navigation wait changes in this experiment. New tests model a uniform prefix shift and a direct landing that collapses the prefix and unmounts the target. Live CI reports prediction and correction attempts separately.
+
+Version 0.2.15 responds to live 0.2.14 traces: a long failed jump to an already mounted target is not repeated, and local recovery may continue up to ten overlapping moves while the exact target remains mounted (only four speculative probes without it). For backward navigation only, the existing relative strategy now covers up to 12 saved viewports and 20 steps within its unchanged 12-second budget. This avoids a premature full replay when a mounted target is just beyond the former four-step limit or a verified older target is slightly beyond nine viewports. No new strategy or verification relaxation; wait timings are unchanged.

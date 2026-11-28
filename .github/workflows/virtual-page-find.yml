@@ -15,6 +15,10 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
     defaults:
       run:
         working-directory: virtual-page-find
@@ -23,6 +27,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Core tests and package build
+        if: matrix.browser == 'chromium'
         run: |
           node --check src/core.js
           node --check src/engine.js
@@ -30,6 +35,7 @@ jobs:
           node tests/core.test.cjs
           python3 build.py
       - name: Upload built packages
+        if: matrix.browser == 'chromium'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: virtual-page-find-packages
@@ -38,9 +44,9 @@ jobs:
       - name: Install development-only browser test dependency
         run: |
           npm install --no-save --package-lock=false playwright@1.56.1
-          npx playwright install --with-deps chromium firefox
+          npx playwright install --with-deps ${{ matrix.browser }}
       - name: DOM integration tests
-        run: node tests/browser-smoke.mjs all
+        run: node tests/browser-smoke.mjs ${{ matrix.browser }}
 
   shared-chat:
     # Do not run against external PR code or expose the share URL in public logs.

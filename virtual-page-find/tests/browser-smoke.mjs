@@ -488,7 +488,7 @@ async function clickDiagnosticsRegression(page,name) {
   await page.evaluate(()=>{setTimeout(()=>{document.querySelector("#private-scroll-container").scrollTop=0;},250);});
   await page.waitForTimeout(1400);
   const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
-  assert.ok(log.includes("Extension: 0.2.14"));
+  assert.ok(log.includes("Extension: 0.2.15"));
   assert.match(log,/nav-environment [^\n]*browser=/);
   assert.match(log,/nav-click-start index=2 [^\n]*click=1/);
   assert.match(log,/nav-click-start index=1 previous=2 [^\n]*click=2/);
@@ -594,10 +594,10 @@ async function predictionRegression(page,name) {
     const el=document.querySelector("#predict-list"),space=document.querySelector("#predict-space");
     let prefix=1200;
     function render(){
-      space.style.height=prefix+2800+"px";
+      space.style.height=prefix+3600+"px";
       const first=Math.max(0,Math.floor((el.scrollTop-prefix)/400)-1);
       space.replaceChildren();
-      for(let i=first;i<Math.min(6,first+3);i++){
+      for(let i=first;i<Math.min(8,first+3);i++){
         const row=document.createElement("div");row.className="row";
         row.style.top=prefix+i*400+"px";row.dataset.itemId="row-"+i;row.textContent="Yesterday";space.append(row);
       }
@@ -608,7 +608,7 @@ async function predictionRegression(page,name) {
   const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#predict-list").id);
   await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
   await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
-  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.snapshot())).hits.length,6);
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.snapshot())).hits.length,8);
   assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:1}))).outcome,"verified");
   await page.evaluate(()=>globalThis.__shiftPrefix());
   await page.waitForTimeout(200);
@@ -624,6 +624,16 @@ async function predictionRegression(page,name) {
   let log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
   assert.match(log,/nav-prediction index=5 source=2 correction=-900 /);
   assert.match(log,/nav-click-end index=5 [^\n]*steps=1 /);
+  // A backward target more than nine viewports away still benefits from
+  // the current verified record rather than a reset to the page start.
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.jump({index:7}))).outcome,"verified");
+  const backward=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(backward.outcome,"verified");assert.equal(backward.method,"relative");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#predict-list"),row=el.querySelector('[data-item-id="row-0"]');
+    if(!row)return false;const a=el.getBoundingClientRect(),b=row.getBoundingClientRect();
+    return b.top>=a.top&&b.top<a.bottom;
+  }),true);
   // First landing causes a prefix collapse and temporarily unmounts the
   // exact target. A single range-based correction remounts it.
   await page.setContent('<div id="predict-list" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div id="before-predict" style="height:1200px"></div><div data-item-id="target" style="height:40px">Yesterday</div><div style="height:1200px"></div></div>');
@@ -649,7 +659,26 @@ async function predictionRegression(page,name) {
   assert.match(log,/nav-correction index=1 correction=-800 /);
   assert.match(log,/nav-correction-end index=1 [^\n]*outcome=verified/);
   assert.match(log,/nav-click-end index=1 [^\n]*steps=2 /);
-  console.log(name+": passed verified-source coordinate prediction and one corrected retry after layout collapse");
+  // The exact target remains mounted, but the scroll host rejects large
+  // jumps. Four local steps are insufficient; continue toward the actual
+  // mounted geometry rather than resetting to the beginning.
+  await page.setContent('<div id="predict-list" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div style="height:1120px"></div><div data-item-id="target" style="height:40px">Yesterday</div><div style="height:800px"></div></div>');
+  const thirdId=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#predict-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),thirdId);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  await page.evaluate(()=>{
+    const el=document.querySelector("#predict-list");let previous=el.scrollTop;
+    el.addEventListener("scroll",()=>{
+      if(Math.abs(el.scrollTop-previous)>el.clientHeight)el.scrollTop=previous;
+      previous=el.scrollTop;
+    });
+  });
+  const local=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(local.outcome,"verified");assert.equal(local.method,"local");
+  log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.ok((log.match(/jump-local index=1 /g)||[]).length>4);
+  assert.doesNotMatch(log,/jump-replay-start index=1 /);
+  console.log(name+": passed source prediction, long backward movement, corrected retry and extended mounted-target local recovery");
 }
 
 async function popupSizing(page,name) {
