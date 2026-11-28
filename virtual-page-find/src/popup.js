@@ -81,7 +81,7 @@
     busy=true;
     try {
       const s=await call("snapshot");
-      if((last?.status==="running"||last?.verification?.running) && s.status!=="running" && !s.verification?.running) await refreshCandidates();
+      if((last?.status==="running"||last?.verification?.running||last?.navBusy) && s.status!=="running" && !s.verification?.running && !s.navBusy) await refreshCandidates();
       busy=false; render(s);
       if ($("diagnostics").open) {
         busy=true;

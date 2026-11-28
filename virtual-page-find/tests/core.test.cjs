@@ -30,6 +30,15 @@ const passed=(function testCore(core) {
   equal(anchored.add({...a,y:700}),"duplicate","anchor moves");
   equal(anchored.items[0].y,700,"anchor coordinate refreshed");
   equal(anchored.add({...a,anchorKey:"b"}),"added","different identity same text");
-  return 22;
+  const changing=core.index(), old={...h,anchorKey:"path-a",anchor:{attr:"data-item-id",value:"row"}};
+  equal(changing.add(h),"added","unanchored observation");
+  equal(changing.add(old),"duplicate","upgrade anchor");
+  equal(changing.add({...old,anchorKey:"path-b"}),"duplicate","same record different path");
+  equal(changing.items[0].anchorKey,"path-b","updated identity");
+  equal(changing.add(h),"duplicate","retain anchor when temporarily absent");
+  equal(changing.items[0].anchorKey,"path-b","retained anchor");
+  equal(changing.add({...old,anchorKey:"different",anchor:{attr:"data-item-id",value:"other"}}),"added","different record at same coordinates");
+  equal(changing.items.length,2,"count after reconciliation");
+  return 30;
 })(context.__vpfCore);
 console.log(passed+" assertions passed");

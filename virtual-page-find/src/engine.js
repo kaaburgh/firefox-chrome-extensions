@@ -288,7 +288,7 @@
     if (!job) return "";
     return [
       "Virtual Page Find diagnostic log v2",
-      "Extension: 0.2.12",
+      "Extension: 0.2.13",
       "Started UTC: "+job.startedUTC,
       "Status: "+job.status+"; pace: "+job.pace+"; matches: "+job.idx.items.length,
       ...(job.droppedLogs ? ["Earlier records discarded: "+job.droppedLogs] : []),
@@ -541,7 +541,7 @@
         }
       }
       if(hit.anchorKey && h.anchorKey===hit.anchorKey && h.context===hit.context && visibility.fullyVisible)exact=true;
-      if(h.context===hit.context && (hit.pinnedKey ? h.pinnedKey===hit.pinnedKey : Math.abs(h.y-hit.y)<10 && Math.abs(h.x-hit.x)<10))approximate=true;
+      if((!hit.anchorKey || !h.anchorKey || hit.anchorKey===h.anchorKey) && h.context===hit.context && (hit.pinnedKey ? h.pinnedKey===hit.pinnedKey : Math.abs(h.y-hit.y)<10 && Math.abs(h.x-hit.x)<10))approximate=true;
       // Collect the entire viewport so a stop caused by an exact match
       // is not mistaken for an inspection limit.
       return true;

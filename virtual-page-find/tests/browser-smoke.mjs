@@ -64,6 +64,7 @@ async function test(name, browserType) {
     await clippedNavigationRegression(page,name);
     await clickDiagnosticsRegression(page,name);
     await turnKeyRegression(page,name);
+    await identityReviewRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -254,7 +255,7 @@ async function navigationRegressions(page,name) {
   await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
   await page.evaluate(()=>{document.querySelector("#original").id="replacement";});
   const ambiguous=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
-  assert.equal(ambiguous.found,false);assert.equal(ambiguous.outcome,"approximate");
+  assert.equal(ambiguous.found,false);assert.equal(ambiguous.outcome,"not-found");
   console.log(name+": passed two-pass reflow, four independent oracle positions, batch verification and rejection of a wrong identity");
 }
 
@@ -486,7 +487,7 @@ async function clickDiagnosticsRegression(page,name) {
   await page.evaluate(()=>{setTimeout(()=>{document.querySelector("#private-scroll-container").scrollTop=0;},250);});
   await page.waitForTimeout(1400);
   const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
-  assert.ok(log.includes("Extension: 0.2.12"));
+  assert.ok(log.includes("Extension: 0.2.13"));
   assert.match(log,/nav-environment [^\n]*browser=/);
   assert.match(log,/nav-click-start index=2 [^\n]*click=1/);
   assert.match(log,/nav-click-start index=1 previous=2 [^\n]*click=2/);
@@ -550,6 +551,42 @@ async function turnKeyRegression(page,name) {
   console.log(name+": passed nested virtualized turn keys, remounting, missing and duplicate search keys, privacy");
 }
 
+async function identityReviewRegression(page,name) {
+  for(const mode of ["path","anchor"]){
+    await page.setContent('<div id="review-id" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div style="height:180px"></div><div class="row" '+(mode==="path"?'data-item-id="logical"':'')+'><span>Yesterday</span></div><div style="height:800px"></div></div>');
+    await page.evaluate(mode=>{
+      const el=document.querySelector("#review-id"),row=el.querySelector(".row");
+      el.addEventListener("scroll",()=>{
+        if(el.scrollTop<=0)return;
+        if(mode==="anchor")row.dataset.itemId="logical";
+        else if(!row.querySelector("i")){const n=document.createElement("i");n.style.display="none";row.prepend(n);}
+      });
+    },mode);
+    const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#review-id").id);
+    await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+    await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+    const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+    assert.equal(s.hits.length,1,mode);assert.equal(s.hits[0].anchor?.value,"logical");
+  }
+  await page.setContent('<div id="review-id" style="height:240px;width:500px;overflow:auto;overflow-anchor:none"><div style="height:400px"></div><div data-item-id="a">Yesterday</div><div style="height:600px"></div><div data-item-id="b">Yesterday</div><div style="height:600px"></div></div>');
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#review-id").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  assert.equal((await page.evaluate(()=>window.__virtualPageFindV1.snapshot())).hits.length,2);
+  await page.evaluate(()=>{
+    const el=document.querySelector("#review-id"),a=el.querySelector('[data-item-id="a"]'),b=el.querySelector('[data-item-id="b"]');
+    const spacer=b.previousElementSibling;a.replaceWith(b);
+    el.addEventListener("scroll",()=>{if(el.scrollTop>700&&!a.isConnected)spacer.after(a);});
+  });
+  const result=await page.evaluate(()=>window.__virtualPageFindV1.jump({index:0}));
+  assert.equal(result.outcome,"verified");
+  assert.equal(await page.evaluate(()=>{
+    const el=document.querySelector("#review-id"),a=el.querySelector('[data-item-id="a"]');
+    return !!a && a.getBoundingClientRect().top>=el.getBoundingClientRect().top && a.getBoundingClientRect().bottom<=el.getBoundingClientRect().bottom;
+  }),true);
+  console.log(name+": passed changing paths/anchor availability and recovery past conflicting identity");
+}
+
 async function popupSizing(page,name) {
   const css=await readFile(new URL("src/popup.css",base),"utf8");
   const html=await readFile(new URL("src/popup.html",base),"utf8");
@@ -596,12 +633,16 @@ async function popupDiagnostics(page,name) {
   // Exercise the actual popup script with a minimal mock of extension APIs.
   // This is not a native toolbar popup or a permission/clipboard integration test.
   await page.evaluate(()=>{
-    const s={status:"layout-uncertain",layoutChanges:1,notes:[],hits:[{context:"[Yesterday]",y:150,x:0}],steps:3,elapsed:300,query:"Yesterday",pace:"fast",lastJump:{index:1,method:"direct",outcome:"verified",elapsedMs:725}};
-    const api={tabs:{query:async()=>[{id:1}]},scripting:{executeScript:async ({args})=>args?[{result:args[0]==="discover"?[{id:0,label:"Test",height:200,range:500}]:args[0]==="diagnostics"?"test diagnostic record":s}]:[]}};
+    const s={navBusy:true,status:"layout-uncertain",layoutChanges:1,notes:[],hits:[{context:"[Yesterday]",y:150,x:0}],steps:3,elapsed:300,query:"Yesterday",pace:"fast",lastJump:{index:1,method:"direct",outcome:"verified",elapsedMs:725}};
+    const api={tabs:{query:async()=>[{id:1}]},scripting:{executeScript:async ({args})=>args?[{result:args[0]==="discover"?(s.navBusy?null:[{id:0,label:"Test",height:200,range:500}]):args[0]==="diagnostics"?"test diagnostic record":s}]:[]}};
+    globalThis.__finishJump=()=>{s.navBusy=false;};
     Object.defineProperty(globalThis,"browser",{value:api,configurable:true});
   });
   await page.addScriptTag({path:fileURLToPath(new URL("src/popup.js",base))});
-  await page.waitForFunction(()=>document.querySelector("#status").textContent.includes("results uncertain"));
+  await page.waitForFunction(()=>document.querySelector("#status").textContent.includes("Navigating"));
+  assert.equal(await page.locator("#start").isDisabled(),true);
+  await page.evaluate(()=>globalThis.__finishJump());
+  await page.waitForFunction(()=>document.querySelector("#status").textContent.includes("results uncertain")&&!document.querySelector("#start").disabled);
   const warning=await page.locator("#layout").textContent();
   assert.ok(warning.includes("missing or duplicated"));
   assert.ok(warning.includes("No user input is required"));
