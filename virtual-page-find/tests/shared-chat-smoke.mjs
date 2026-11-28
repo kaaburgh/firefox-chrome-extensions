@@ -188,8 +188,8 @@ try {
         ["Result limit reached.","result-limit"],
         ["Scan error (details omitted)","scan-error"]
       ]);
-      const scanEvents=/^\d+ms (?:start|finding-top|top-check|scanning|range-change|view|scroll|settle|bottom-check|final-view|rescan-start|rescan-finished|restore|finished) (.*)$/;
-      const scanField=/^(?:step|steps|pass|passes|top|rawTop|range|oldRange|height|viewHeight|newHits|totalHits|hits|anchoredHits|layoutChanges|finalLayoutChanges|from|to|target|actual|requested|attempt|stable|mutations|ignoredMutations|waitMs|collectMs|firstHits|firstWarnings|changes|minimumWait)=-?\d+$|^(?:reachedEnd|firstReachedEnd|manual|reverse)=(?:true|false)$|^reason=(?:quiet|timeout|interrupted)$|^status=(?:partial|traversed|layout-uncertain)$|^pace=(?:fast|normal|slow)$/;
+      const scanEvents=/^\d+ms (?:start|finding-top|top-check|top-recovery-start|top-recovery-step|top-recovery-end|scanning|range-change|view|scroll|settle|bottom-check|final-view|rescan-start|rescan-finished|restore|finished) (.*)$/;
+      const scanField=/^(?:step|steps|pass|passes|top|rawTop|range|oldRange|height|viewHeight|newHits|totalHits|hits|anchoredHits|layoutChanges|finalLayoutChanges|from|to|target|immediate|actual|requested|attempt|stable|mutations|ignoredMutations|waitMs|collectMs|firstHits|firstWarnings|changes|minimumWait)=-?\d+$|^(?:reachedEnd|firstReachedEnd|manual|reverse)=(?:true|false)$|^reason=(?:quiet|timeout|interrupted)$|^status=(?:partial|traversed|layout-uncertain)$|^pace=(?:fast|normal|slow)$/;
       for(const line of scanLog.split("\n")){
         const warning=line.match(/^(\d+ms warning) reason=(.*)$/);
         if(warning){console.log(warning[1]+" code="+(safeReasons.get(warning[2])||"other"));continue;}
@@ -235,7 +235,12 @@ try {
             {ordinal:6,kind:"long-forward"},
             {ordinal:5,kind:"short-backward"},
             {ordinal:6,kind:"short-forward"},
-            {ordinal:1,kind:"long-backward"}
+            {ordinal:1,kind:"long-backward"},
+            {ordinal:3,kind:"first-to-third"},
+            {ordinal:1,kind:"third-to-first"},
+            {ordinal:6,kind:"first-to-last"},
+            {ordinal:1,kind:"last-to-first"},
+            {ordinal:4,kind:"first-to-fourth"}
           ];
           let previous=null;
           for(const {ordinal,kind} of cases){
@@ -296,6 +301,8 @@ try {
                   replayStarts:log.filter(l=>l.includes(" jump-replay-start ")).length,
                   replaySteps:log.filter(l=>l.includes(" jump-replay-scroll ")).length,
                   directAttempts:log.filter(l=>l.includes(" jump-direct ")).length,
+                  predictedAttempts:log.filter(l=>l.includes(" nav-prediction ")).length,
+                  correctionAttempts:log.filter(l=>l.includes(" nav-correction ")).length,
                   traceComplete:boundary>=0};
               }finally{clearInterval(timer);}
             },{index,ordinal,oracleMinutes});
@@ -310,10 +317,10 @@ try {
           // URLs, page text or arbitrary exception strings.
           await page.waitForTimeout(800);
           const clickLog=await page.evaluate(()=>globalThis.__virtualPageFindV1.diagnostics());
-          const navEvent=/^\d+ms (?:nav-environment|nav-click-start|nav-choice|nav-move|nav-settle|nav-direct-state|nav-fallback|nav-click-end|nav-post|nav-interrupt|nav-error) /;
-          const numeric=/^(?:click|index|previous|lastVerified|source|savedY|savedDistance|major|viewportWidth|viewportHeight|devicePixelRatio|visualScale|offsetMinutes|top|rawTop|range|height|mountedY|idMatches|candidates|sameContext|sameAnchor|clippedAnchor|wrongContext|step|from|target|clamped|immediate|oldRange|minimum|waitMs|actual|minTop|maxTop|minRange|maxRange|changes|mutations|relevantMutations|firstVisible|visibleSamples|lostVisibility|elapsedMs|steps|afterMs)=-?\d+(?:\.\d+)?$/;
+          const navEvent=/^\d+ms (?:nav-environment|nav-click-start|nav-choice|nav-move|nav-settle|nav-direct-state|nav-fallback|nav-click-end|nav-post|nav-interrupt|nav-error|nav-prediction|nav-correction|nav-correction-end) /;
+          const numeric=/^(?:click|index|previous|lastVerified|source|savedY|savedDistance|correction|predicted|major|viewportWidth|viewportHeight|devicePixelRatio|visualScale|offsetMinutes|top|rawTop|range|height|mountedY|idMatches|candidates|sameContext|sameAnchor|clippedAnchor|wrongContext|step|from|target|clamped|immediate|oldRange|minimum|waitMs|actual|minTop|maxTop|minRange|maxRange|changes|mutations|relevantMutations|firstVisible|visibleSamples|lostVisibility|elapsedMs|steps|afterMs)=-?\d+(?:\.\d+)?$/;
           const bool=/^(?:documentRoot|reverse|sibling|inspectionLimited|stateUnavailable|mounted|anchored|relativeEligible|sourceVisible|cancelled)=(?:true|false)$/;
-          const enumField=/^(?:browser=(?:firefox|chromium|other)|platform=(?:mac|windows|android|linux|other)|anchorType=(?:none|id|data-message-id|data-turn-id|data-item-id|data-content-search-turn-key|data-turn-key)|pace=(?:fast|normal|slow)|mountReason=(?:no-anchor|id-not-mounted|id-ambiguous|wrapper-changed|text-path-changed|text-changed|no-rendered-box|mounted)|reason=(?:target-mounted|no-anchor|no-source|same-source|source-too-far|source-not-visible|relative|target-not-verified|navigation-exception)|(?:method|from|to|strategy)=(?:none|visible|direct|relative|local|replay|replay-top)|state=(?:interrupted|quiet|geometry-quiet|target-visible)|(?:observed|outcome)=(?:verified|approximate|not-found|error)|type=(?:wheel|touchstart|pointerdown|keydown))$/;
+          const enumField=/^(?:browser=(?:firefox|chromium|other)|platform=(?:mac|windows|android|linux|other)|anchorType=(?:none|id|data-message-id|data-turn-id|data-item-id|data-content-search-turn-key|data-turn-key)|pace=(?:fast|normal|slow)|mountReason=(?:no-anchor|id-not-mounted|id-ambiguous|wrapper-changed|text-path-changed|text-changed|no-rendered-box|mounted)|reason=(?:target-mounted|no-anchor|no-source|same-source|source-too-far|source-not-visible|relative|predicted|target-not-verified|navigation-exception)|(?:method|from|to|strategy)=(?:none|visible|direct|relative|local|replay|replay-top)|state=(?:interrupted|quiet|geometry-quiet|target-visible)|(?:observed|outcome)=(?:verified|approximate|not-found|error)|type=(?:wheel|touchstart|pointerdown|keydown))$/;
           for(const line of clickLog.split("\n")){
             const m=line.match(navEvent);
             if(m)console.log(m[0]+line.slice(m[0].length).split(" ").filter(t=>numeric.test(t)||bool.test(t)||enumField.test(t)).join(" "));
