@@ -634,7 +634,7 @@ async function popupDiagnostics(page,name) {
   // This is not a native toolbar popup or a permission/clipboard integration test.
   await page.evaluate(()=>{
     const s={navBusy:true,status:"layout-uncertain",layoutChanges:1,notes:[],hits:[{context:"[Yesterday]",y:150,x:0}],steps:3,elapsed:300,query:"Yesterday",pace:"fast",lastJump:{index:1,method:"direct",outcome:"verified",elapsedMs:725}};
-    const api={tabs:{query:async()=>[{id:1}]},scripting:{executeScript:async ({args})=>args?[{result:args[0]==="discover"?(s.navBusy?null:[{id:0,label:"Test",height:200,range:500}]):args[0]==="diagnostics"?"test diagnostic record":s}]:[]}};
+    const api={tabs:{query:async()=>[{id:1}]},scripting:{executeScript:async ({args})=>args?[{result:args[0]==="discover"?(s.navBusy?null:[{id:0,label:"Test",height:200,range:500}]):args[0]==="diagnostics"?"test diagnostic record":structuredClone(s)}]:[]}};
     globalThis.__finishJump=()=>{s.navBusy=false;};
     Object.defineProperty(globalThis,"browser",{value:api,configurable:true});
   });
