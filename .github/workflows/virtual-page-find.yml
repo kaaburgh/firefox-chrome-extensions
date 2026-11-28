@@ -53,6 +53,7 @@ jobs:
     steps:
       - name: Check optional shared-page configuration
         id: config
+        working-directory: .
         env:
           VPF_SHARED_URL: ${{ secrets.VPF_SHARED_URL }}
         run: |
