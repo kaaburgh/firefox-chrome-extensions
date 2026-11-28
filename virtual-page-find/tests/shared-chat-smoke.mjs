@@ -13,10 +13,22 @@ try {
 const expected=process.env.VPF_EXPECTED_COUNT?.trim();
 if(expected && !/^\d+$/.test(expected)){console.error("shared-chat: invalid expected count");process.exit(2);}
 const query="yesterday";
+// Independent, user-supplied oracle for the configured test snapshot.
+// Berlin clock minutes for six occurrences, in their original order.
+// Only ordinal numbers, never recovered label text or IDs, enter CI output.
+const timezone=process.env.VPF_TIMEZONE||"Europe/Berlin";
+const oracleMinutes=[46,106,173,225,291,348];
+if(!["Europe/Berlin","UTC"].includes(timezone)){console.error("shared-chat: unsupported test timezone");process.exit(2);}
+const expectedOrdinals=timezone==="UTC"?[2,3,4,5,6]:[1,2,3,4,5,6];
 let browser, stage="browser launch";
 try {
   browser=await firefox.launch({headless:true});
-  const page=await browser.newPage({viewport:{width:1280,height:900}});
+  const page=await browser.newPage({viewport:{width:1280,height:900},timezoneId:timezone,locale:"en-US"});
+  // Fixed browser time keeps the relative-date test reproducible; timers
+  // continue to run normally. This snapshot was inspected on November 28.
+  await page.clock.setFixedTime(new Date("2026-11-28T07:00:00Z"));
+  const clock=await page.evaluate(()=>({zone:Intl.DateTimeFormat().resolvedOptions().timeZone,offset:new Date().getTimezoneOffset()}));
+  console.log("shared-chat: clock "+JSON.stringify(clock));
   stage="page load";
   const response=await page.goto(url.href,{waitUntil:"domcontentloaded",timeout:45000});
   const status=response?.status()||0;
@@ -51,13 +63,29 @@ try {
       stage="scan";
       // Sample only the structural shape around matching text while the
       // virtualizer mounts rows. Never serialize attribute values or text.
-      await page.evaluate(query=>{
-        const shapes=new Set();
+      await page.evaluate(({query,oracleMinutes,timezone})=>{
+        const shapes=new Set(), observed=new Set(), observedOtherDay=new Set();
+        function ordinal(text,requireYesterday=true){
+          const s=text.replace(/[\[\]]/g,"");
+          const m=s.match(requireYesterday?/yesterday\s*(\d{1,2}):(\d{2})\s*([AP]M)\b/i:/\b(\d{1,2}):(\d{2})\s*([AP]M)\b/i);
+          if(!m)return 0;
+          const mins=(Number(m[1])%12+(m[3].toUpperCase()==="PM"?12:0))*60+Number(m[2]);
+          return oracleMinutes.indexOf((mins+(timezone==="UTC"?60:0))%1440)+1;
+        }
         const attrs=["id","data-message-id","data-turn-id","data-item-id","data-testid","data-message-author-role","data-index","data-key","data-turn","role","aria-label","datetime"];
         const tags=new Set(["div","span","time","article","section","main","p","li","button","header","footer"]);
         const inspect=()=>{
           const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
           for(let node=w.nextNode();node;node=w.nextNode()){
+            const label=node.parentElement?.closest("[role][aria-label]");
+            if(label){
+              const t=label.textContent||"";
+              if(t.length<=160){
+                const y=ordinal(t);
+                if(y)observed.add(y);
+                else if(!/yesterday/i.test(t)){const o=ordinal(t,false);if(o)observedOtherDay.add(o);}
+              }
+            }
             if(!node.data.toLowerCase().includes(query))continue;
             const range=document.createRange();range.selectNodeContents(node);
             if(!Array.from(range.getClientRects()).some(r=>r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight))continue;
@@ -122,20 +150,28 @@ try {
         });
         observer.observe(document.documentElement,{childList:true,characterData:true,subtree:true});
         const timer=setInterval(inspect,200);inspect();
-        globalThis.__vpfLiveProbe=()=>{clearInterval(timer);observer.disconnect();document.removeEventListener("scroll",onScroll,true);return {shapes:[...shapes].map(s=>JSON.parse(s)),busyViews:[...buckets.values()].sort((a,b)=>b.records-a.records).slice(0,5)};};
-      },query);
+        globalThis.__vpfLiveProbe=()=>{clearInterval(timer);observer.disconnect();document.removeEventListener("scroll",onScroll,true);return {shapes:[...shapes].map(s=>JSON.parse(s)),busyViews:[...buckets.values()].sort((a,b)=>b.records-a.records).slice(0,5),observed:[...observed].sort((a,b)=>a-b),observedOtherDay:[...observedOtherDay].sort((a,b)=>a-b)};};
+      },{query,oracleMinutes,timezone});
       await page.evaluate(({id,query})=>globalThis.__virtualPageFindV1.start({id,query,pace:"normal",rescan:true}),{id:candidate.id,query});
       await page.waitForFunction(()=>globalThis.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:190000});
-      const scan=await page.evaluate(()=>{
+      const scan=await page.evaluate(({oracleMinutes,timezone})=>{
         const s=globalThis.__virtualPageFindV1.snapshot();
+        const ordinals=s.hits.map(h=>{
+          const m=h.context.replace(/[\[\]]/g,"").match(/yesterday\s*(\d{1,2}):(\d{2})\s*([AP]M)\b/i);
+          if(!m)return 0;
+          const mins=(Number(m[1])%12+(m[3].toUpperCase()==="PM"?12:0))*60+Number(m[2]);
+          return oracleMinutes.indexOf((mins+(timezone==="UTC"?60:0))%1440)+1;
+        });
         const attrs={};
         for(const h of s.hits){const attr=h.anchor?.attr?(h.anchor.up?"sibling-":"")+h.anchor.attr:"none";attrs[attr]=(attrs[attr]||0)+1;}
-        return {status:s.status,matches:s.hits.length,steps:s.steps,pass:s.pass,layoutChanges:s.layoutChanges,finalLayoutChanges:s.finalLayoutChanges,anchorTypes:attrs,positions:s.hits.map(h=>h.y)};
-      });
+        return {status:s.status,matches:s.hits.length,steps:s.steps,pass:s.pass,layoutChanges:s.layoutChanges,finalLayoutChanges:s.finalLayoutChanges,anchorTypes:attrs,positions:s.hits.map(h=>h.y),ordinals};
+      },{oracleMinutes,timezone});
       console.log("shared-chat: scan "+JSON.stringify(scan));
       const shapes=await page.evaluate(()=>globalThis.__vpfLiveProbe());
       console.log("shared-chat: match ancestor shapes "+JSON.stringify(shapes.shapes));
       console.log("shared-chat: mutation summary "+JSON.stringify(shapes.busyViews));
+      const oracleOK=JSON.stringify(scan.ordinals)===JSON.stringify(expectedOrdinals);
+      console.log("shared-chat: oracle "+JSON.stringify({expected:expectedOrdinals,engine:scan.ordinals,independentMounted:shapes.observed,otherDay:shapes.observedOtherDay,ok:oracleOK}));
       const scanLog=await page.evaluate(()=>globalThis.__virtualPageFindV1.diagnostics());
       const safeReasons=new Map([
         ["Could not establish a stable top; earlier content may be missing.","unstable-top"],
@@ -160,7 +196,7 @@ try {
         const m=line.match(scanEvents);
         if(m)console.log(line.slice(0,line.length-m[1].length)+m[1].split(" ").filter(token=>scanField.test(token)).join(" "));
       }
-      if(!scan.matches || scan.status==="partial" || (expected && scan.matches!==Number(expected)))process.exitCode=1;
+      if(!oracleOK || scan.status==="partial" || (timezone==="Europe/Berlin" && expected && scan.matches!==Number(expected)))process.exitCode=1;
       if(scan.matches){
         stage="verify";
         await page.evaluate(()=>globalThis.__virtualPageFindV1.verifyAll());
@@ -176,7 +212,7 @@ try {
           const m=line.match(event);
           if(m)console.log(line.slice(0,line.length-m[1].length)+m[1].split(" ").filter(token=>allowed.test(token)).join(" "));
         }
-        if(v.cancel||v.checked!==v.total||v.notFound)process.exitCode=1;
+        if(v.cancel||v.checked!==v.total||v.verified!==v.total||v.notFound)process.exitCode=1;
       }
     }
   }

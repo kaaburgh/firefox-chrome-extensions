@@ -47,6 +47,10 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        timezone: [Europe/Berlin, UTC]
     defaults:
       run:
         working-directory: virtual-page-find
@@ -77,4 +81,5 @@ jobs:
         env:
           VPF_SHARED_URL: ${{ secrets.VPF_SHARED_URL }}
           VPF_EXPECTED_COUNT: ${{ vars.VPF_EXPECTED_COUNT }}
+          VPF_TIMEZONE: ${{ matrix.timezone }}
         run: node tests/shared-chat-smoke.mjs
