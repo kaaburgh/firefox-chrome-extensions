@@ -49,6 +49,32 @@ try {
       const candidate=containers.find(c=>c.range>0);
       if(!candidate)throw new Error("no scrolling container");
       stage="scan";
+      // Sample only the structural shape around matching text while the
+      // virtualizer mounts rows. Never serialize attribute values or text.
+      await page.evaluate(query=>{
+        const shapes=new Set();
+        const attrs=["id","data-message-id","data-turn-id","data-item-id","data-testid","data-message-author-role","data-index","data-key","data-turn","role","aria-label","datetime"];
+        const tags=new Set(["div","span","time","article","section","main","p","li","button","header","footer"]);
+        const inspect=()=>{
+          const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+          for(let node=w.nextNode();node;node=w.nextNode()){
+            if(!node.data.toLowerCase().includes(query))continue;
+            const range=document.createRange();range.selectNodeContents(node);
+            if(!Array.from(range.getClientRects()).some(r=>r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight))continue;
+            const chain=[];
+            for(let p=node.parentElement;p&&chain.length<12;p=p.parentElement){
+              const present=attrs.filter(a=>p.hasAttribute(a));
+              const testId=p.getAttribute("data-testid")||"";
+              const kind=/^conversation-turn-\d+$/.test(testId)?"turn-number":/^conversation-turn-/.test(testId)?"turn-other":"";
+              chain.push({tag:tags.has(p.localName)?p.localName:"other",attrs:present,kind,
+                siblingMessage:!!p.querySelector("[data-message-id], [data-turn-id], [data-testid^='conversation-turn-']")});
+            }
+            if(shapes.size<24)shapes.add(JSON.stringify(chain));
+          }
+        };
+        const timer=setInterval(inspect,200);inspect();
+        globalThis.__vpfLiveProbe=()=>{clearInterval(timer);return [...shapes].map(s=>JSON.parse(s));};
+      },query);
       await page.evaluate(({id,query})=>globalThis.__virtualPageFindV1.start({id,query,pace:"normal",rescan:true}),{id:candidate.id,query});
       await page.waitForFunction(()=>globalThis.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:190000});
       const scan=await page.evaluate(()=>{
@@ -58,6 +84,32 @@ try {
         return {status:s.status,matches:s.hits.length,steps:s.steps,pass:s.pass,layoutChanges:s.layoutChanges,finalLayoutChanges:s.finalLayoutChanges,anchorTypes:attrs,positions:s.hits.map(h=>h.y)};
       });
       console.log("shared-chat: scan "+JSON.stringify(scan));
+      const shapes=await page.evaluate(()=>globalThis.__vpfLiveProbe());
+      console.log("shared-chat: match ancestor shapes "+JSON.stringify(shapes));
+      const scanLog=await page.evaluate(()=>globalThis.__virtualPageFindV1.diagnostics());
+      const safeReasons=new Map([
+        ["Could not establish a stable top; earlier content may be missing.","unstable-top"],
+        ["Some views did not settle; asynchronous content may have been missed.","settle-timeout"],
+        ["Page moved backwards during scan; completeness is uncertain.","backward-motion"],
+        ["Scrolling stalled (possibly scroll snapping or page interference).","stalled"],
+        ["A scroll jump exceeded one viewport; some content may have been skipped.","viewport-gap"],
+        ["Second pass incomplete; showing first-pass results.","retry-incomplete"],
+        ["Scan safety limit reached.","scan-limit"],
+        ["Selected container became invisible.","invisible"],
+        ["Selected container is no longer visible.","invisible"],
+        ["Selected scroll container was removed.","removed"],
+        ["DOM inspection limit reached.","dom-limit"],
+        ["Result limit reached.","result-limit"],
+        ["Scan error (details omitted)","scan-error"]
+      ]);
+      const scanEvents=/^\d+ms (?:start|finding-top|top-check|scanning|range-change|view|scroll|settle|bottom-check|final-view|rescan-start|rescan-finished|restore|finished) (.*)$/;
+      const scanField=/^(?:step|steps|pass|passes|top|rawTop|range|oldRange|height|viewHeight|newHits|totalHits|hits|anchoredHits|layoutChanges|finalLayoutChanges|from|to|target|actual|requested|attempt|stable|mutations|waitMs|collectMs|firstHits|firstWarnings|changes|minimumWait)=-?\d+$|^(?:reachedEnd|firstReachedEnd|manual|reverse)=(?:true|false)$|^reason=(?:quiet|timeout|interrupted)$|^status=(?:partial|traversed|layout-uncertain)$|^pace=(?:fast|normal|slow)$/;
+      for(const line of scanLog.split("\n")){
+        const warning=line.match(/^(\d+ms warning) reason=(.*)$/);
+        if(warning){console.log(warning[1]+" code="+(safeReasons.get(warning[2])||"other"));continue;}
+        const m=line.match(scanEvents);
+        if(m)console.log(line.slice(0,line.length-m[1].length)+m[1].split(" ").filter(token=>scanField.test(token)).join(" "));
+      }
       if(!scan.matches || scan.status==="partial" || (expected && scan.matches!==Number(expected)))process.exitCode=1;
       if(scan.matches){
         stage="verify";

@@ -167,12 +167,21 @@ async function reviewRegressions(page,name) {
   const jumping=await setup(`<div id="review-list"><div style="height:1200px"></div></div>
     <script>(()=>{const el=document.querySelector("#review-list");let jumped=false;
       el.addEventListener("scroll",()=>{if(!jumped && el.scrollTop>0){jumped=true;el.scrollTop=900;}});})();</script>`);
-  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),jumping);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast",rescan:false}),jumping);
   await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
   s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
   assert.equal(s.status,"partial");
   assert.ok(s.notes.some(n=>n.includes("A scroll jump exceeded one viewport")));
-  console.log(name+": passed append/prepend layout uncertainty, private diagnostics, and real gap warning");
+  const recover=await setup(`<div id="review-list"><div style="height:350px"></div><div>Yesterday missed on first pass</div><div style="height:850px"></div></div>
+    <script>(()=>{const el=document.querySelector("#review-list");let jumped=false;
+      el.addEventListener("scroll",()=>{if(!jumped && el.scrollTop>0){jumped=true;el.scrollTop=900;}});})();</script>`);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),recover);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running",null,{timeout:90000});
+  s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.status,"traversed",s.notes.join("; "));
+  assert.equal(s.pass,2);assert.equal(s.hits.length,1);
+  assert.ok((await page.evaluate(()=>window.__virtualPageFindV1.diagnostics())).includes("firstWarnings=1"));
+  console.log(name+": passed append/prepend uncertainty, private diagnostics, real gap warning and recovery from a transient gap");
 }
 
 async function navigationRegressions(page,name) {

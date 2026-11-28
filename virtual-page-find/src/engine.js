@@ -335,15 +335,26 @@
       j.finalLayoutChanges=j.layoutChanges-changesBefore;
       }
       await scanPass();
-      if(j.rescan && j.reachedEnd && j.finalLayoutChanges && !j.notes.length && alive()) {
-        const first={idx:j.idx,identities:j.identities,changes:j.finalLayoutChanges};
+      // A transient jump, stall or unsettled view on the first pass is
+      // another reason to retry, not a reason to forbid a recovery pass.
+      const recoverable=new Set([
+        "Could not establish a stable top; earlier content may be missing.",
+        "Some views did not settle; asynchronous content may have been missed.",
+        "Page moved backwards during scan; completeness is uncertain.",
+        "Scrolling stalled (possibly scroll snapping or page interference).",
+        "A scroll jump exceeded one viewport; some content may have been skipped."
+      ]);
+      if(j.rescan && alive() && j.notes.every(n=>recoverable.has(n)) &&
+         (j.notes.length || (j.reachedEnd && j.finalLayoutChanges))) {
+        const first={idx:j.idx,identities:j.identities,changes:j.finalLayoutChanges,notes:j.notes,reachedEnd:j.reachedEnd};
         j.pass=2;
-        j.idx=core.index(LIMIT.hits);j.identities={nodes:new WeakMap(),next:0};
-        log(j,"rescan-start",{firstHits:first.idx.items.length});
+        j.idx=core.index(LIMIT.hits);j.identities={nodes:new WeakMap(),next:0};j.notes=[];
+        log(j,"rescan-start",{firstHits:first.idx.items.length,firstWarnings:first.notes.length,firstReachedEnd:first.reachedEnd});
         await scanPass();
         if(!j.reachedEnd || j.notes.length || j.cancel) {
           j.idx=first.idx;j.identities=first.identities;
-          j.finalLayoutChanges=first.changes;
+          j.finalLayoutChanges=first.changes;j.reachedEnd=first.reachedEnd;
+          j.notes=first.notes;
           note(j,"Second pass incomplete; showing first-pass results.");
         } else log(j,"rescan-finished",{hits:j.idx.items.length,changes:j.finalLayoutChanges});
       }

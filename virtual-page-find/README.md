@@ -1,4 +1,4 @@
-# Virtual Page Find (0.2.2)
+# Virtual Page Find (0.2.3)
 
 Experimental Firefox and Chrome Manifest V3 extension for finding literal text in scrollable/virtualized web pages. Built from scratch; no runtime or build dependencies. The browser toolbar popup controls a scan in the top frame. It never injects a panel into the website.
 
@@ -53,3 +53,5 @@ Version 0.2.2 adds sequential navigation replay when a direct jump cannot locate
 ## Optional real shared-chat CI smoke test
 
 Set the repository Actions secret `VPF_SHARED_URL` to a publicly viewable `https://chatgpt.com/share/…` URL (not a private conversation URL). Optionally set repository Actions variable `VPF_EXPECTED_COUNT` to the independently known number of case-insensitive “yesterday” matches on that specific snapshot. The same-repository PR CI automatically runs the Firefox live test after each relevant commit; without the secret the job reports disabled. The share URL is not committed or logged. No authentication, screenshots, DOM dumps, page text, raw exceptions, IDs or URL are published; logs contain only status, geometry, counts, fixed attribute names and navigation outcomes. Access challenges, unavailable conversation DOM or redirects stop the test rather than attempting a bypass. A public share snapshot can differ from the signed-in conversation, including its virtualization and timestamps. Approximate matches remain unverified; expected count is optional because snapshots can differ. Use a non-sensitive test conversation. For local testing, run the same script after installing Playwright Firefox with the URL in the environment.
+
+Version 0.2.3 permits the bounded second pass to recover transient first-pass scrolling/settling warnings, even when the first pass stalled. The original warnings are retained in diagnostics; only a clean complete retry can replace first-pass results. Fatal inspection limits and cancellation do not trigger retries. Live CI additionally publishes allowlisted scan events, fixed warning codes and bounded ancestor-structure summaries (attribute presence only, no page text or attribute values).
