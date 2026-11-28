@@ -235,7 +235,12 @@ try {
             {ordinal:6,kind:"long-forward"},
             {ordinal:5,kind:"short-backward"},
             {ordinal:6,kind:"short-forward"},
-            {ordinal:1,kind:"long-backward"}
+            {ordinal:1,kind:"long-backward"},
+            {ordinal:3,kind:"first-to-third"},
+            {ordinal:1,kind:"third-to-first"},
+            {ordinal:6,kind:"first-to-last"},
+            {ordinal:1,kind:"last-to-first"},
+            {ordinal:4,kind:"first-to-fourth"}
           ];
           let previous=null;
           for(const {ordinal,kind} of cases){
