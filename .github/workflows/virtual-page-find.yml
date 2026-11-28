@@ -48,6 +48,26 @@ jobs:
       - name: DOM integration tests
         run: node tests/browser-smoke.mjs ${{ matrix.browser }}
 
+  native-firefox-popup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: virtual-page-find
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build and install native browser test dependency
+        run: |
+          python3 build.py
+          firefox --version
+          geckodriver --version
+          python3 -m venv "$RUNNER_TEMP/vpf-native"
+          "$RUNNER_TEMP/vpf-native/bin/pip" install selenium==4.38.0
+      - name: Open actual Firefox toolbar popup from built ZIP
+        run: xvfb-run -a "$RUNNER_TEMP/vpf-native/bin/python" tests/native-firefox-popup.py
+
   shared-chat:
     # Do not run against external PR code or expose the share URL in public logs.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
