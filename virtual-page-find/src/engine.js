@@ -92,7 +92,7 @@
   }
   // Existing application-owned identifiers, not extension-injected markers.
   // Deliberately exclude data-index, data-testid and DOM paths without an ID.
-  const anchorAttrs=["data-message-id","data-turn-id","data-item-id","id"];
+  const anchorAttrs=["data-message-id","data-turn-id","data-item-id","data-content-search-turn-key","data-turn-key","id"];
   function anchorElement(root,attr,value) {
     const nodes=root.querySelectorAll("["+attr+"=\""+CSS.escape(value)+"\"]");
     return nodes.length===1 ? nodes[0] : null;
@@ -288,7 +288,7 @@
     if (!job) return "";
     return [
       "Virtual Page Find diagnostic log v2",
-      "Extension: 0.2.11",
+      "Extension: 0.2.12",
       "Started UTC: "+job.startedUTC,
       "Status: "+job.status+"; pace: "+job.pace+"; matches: "+job.idx.items.length,
       ...(job.droppedLogs ? ["Earlier records discarded: "+job.droppedLogs] : []),

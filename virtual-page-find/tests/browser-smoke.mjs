@@ -63,6 +63,7 @@ async function test(name, browserType) {
     await relativeRecoveryRegression(page,name);
     await clippedNavigationRegression(page,name);
     await clickDiagnosticsRegression(page,name);
+    await turnKeyRegression(page,name);
     await popupSizing(page, name);
     await popupDiagnostics(page, name);
   } finally { await browser.close(); }
@@ -485,7 +486,7 @@ async function clickDiagnosticsRegression(page,name) {
   await page.evaluate(()=>{setTimeout(()=>{document.querySelector("#private-scroll-container").scrollTop=0;},250);});
   await page.waitForTimeout(1400);
   const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
-  assert.ok(log.includes("Extension: 0.2.11"));
+  assert.ok(log.includes("Extension: 0.2.12"));
   assert.match(log,/nav-environment [^\n]*browser=/);
   assert.match(log,/nav-click-start index=2 [^\n]*click=1/);
   assert.match(log,/nav-click-start index=1 previous=2 [^\n]*click=2/);
@@ -501,6 +502,52 @@ async function clickDiagnosticsRegression(page,name) {
   // A popup reads the same journal through the engine's public API.
   assert.equal(await page.evaluate(()=>window.__virtualPageFindV1.diagnostics()),log);
   console.log(name+": passed per-click diagnostics, correlated moves and settles, late reflow and privacy");
+}
+
+async function turnKeyRegression(page,name) {
+  // Reconstruct the observed signed-in transcript nesting, not the
+  // shared-chat sibling-turn structure.
+  await page.setContent('<!doctype html><style>#key-list{height:240px;width:500px;overflow:auto;overflow-anchor:none;position:relative}#key-space{height:2400px;position:relative}.row{position:absolute;height:400px;overflow:clip;width:100%}</style><div id="key-list"><div id="key-space"></div></div>');
+  await page.evaluate(()=>{
+    const root=document.querySelector("#key-list"),space=document.querySelector("#key-space");
+    const render=()=>{
+      const first=Math.max(0,Math.floor(root.scrollTop/400)-1);
+      space.replaceChildren();
+      for(let i=first;i<Math.min(6,first+4);i++){
+        const row=document.createElement("div");row.className="row";row.style.top=i*400+"px";
+        row.setAttribute("data-virtualized-turn","");
+        const outer=document.createElement("div");outer.setAttribute("data-turn-key","private-turn-"+i);
+        const inner=document.createElement("div");
+        // A missing or non-unique search key must fall back to the turn key.
+        if(i!==1)inner.setAttribute("data-content-search-turn-key",i===2||i===3?"shared-key":"private-search-"+i);
+        inner.innerHTML='<div role="group" data-markdown-copy=""><time><span>Yesterday</span></time></div>';
+        outer.append(inner);row.append(outer);space.append(row);
+      }
+    };
+    let timer;root.addEventListener("scroll",()=>{clearTimeout(timer);timer=setTimeout(render,70);});render();
+  });
+  const id=await page.evaluate(()=>window.__virtualPageFindV1.discover().find(c=>c.label==="div#key-list").id);
+  await page.evaluate(id=>window.__virtualPageFindV1.start({id,query:"Yesterday",pace:"fast"}),id);
+  await page.waitForFunction(()=>window.__virtualPageFindV1.snapshot().status!=="running");
+  const s=await page.evaluate(()=>window.__virtualPageFindV1.snapshot());
+  assert.equal(s.hits.length,6);
+  assert.deepEqual(s.hits.map(h=>h.anchor?.attr),["data-content-search-turn-key","data-turn-key","data-turn-key","data-turn-key","data-content-search-turn-key","data-content-search-turn-key"]);
+  for(const index of [4,2,1,5,0]){
+    const result=await page.evaluate(index=>window.__virtualPageFindV1.jump({index}),index);
+    assert.equal(result.outcome,"verified","turn "+index);
+    assert.equal(await page.evaluate(index=>{
+      const row=document.querySelector('[data-turn-key="private-turn-'+index+'"]');
+      if(!row)return false;
+      const range=document.createRange();range.selectNodeContents(row.querySelector("span"));
+      const b=range.getBoundingClientRect(),a=document.querySelector("#key-list").getBoundingClientRect();
+      return b.top>=a.top&&b.bottom<=a.bottom;
+    },index),true);
+  }
+  const log=await page.evaluate(()=>window.__virtualPageFindV1.diagnostics());
+  assert.match(log,/anchorType=data-content-search-turn-key/);
+  assert.match(log,/anchorType=data-turn-key/);
+  assert.ok(!log.includes("private-turn-")&&!log.includes("private-search-")&&!log.includes("shared-key"));
+  console.log(name+": passed nested virtualized turn keys, remounting, missing and duplicate search keys, privacy");
 }
 
 async function popupSizing(page,name) {
